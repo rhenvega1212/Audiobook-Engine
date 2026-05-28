@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
 import { requireUser } from "@/lib/api/auth";
 import { resolveMatchStatus, type DetectedCharacter } from "@/lib/characters/match-status";
 import type { Character } from "@/lib/types/database";
@@ -34,13 +36,9 @@ export async function GET(
     .select("*, characters(*)")
     .eq("book_id", id);
 
-  const { data: lines } = await supabase
-    .from("tagged_lines")
-    .select("*")
-    .eq("book_id", id)
-    .order("line_order");
+  const lines = await fetchAllTaggedLines(supabase, id, "*");
 
-  const flaggedCount = (lines ?? []).filter((l) => l.flag_reason).length;
+  const flaggedCount = lines.filter((l) => l.flag_reason).length;
 
   const detectedMap = new Map<string, { count: number; samples: string[] }>();
 
@@ -52,7 +50,7 @@ export async function GET(
     }
   }
 
-  for (const line of lines ?? []) {
+  for (const line of lines) {
     if (line.speaker_label === "Narrator") continue;
     const entry = detectedMap.get(line.speaker_label) ?? {
       count: 0,
@@ -84,6 +82,7 @@ export async function GET(
       matched_character_id: character?.id ?? null,
       matched_character_name: character?.canonical_name ?? null,
       suggested_alias_of: suggestedAliasOf,
+      voice_name: character?.elevenlabs_voice_name ?? null,
     });
   }
 
@@ -93,6 +92,47 @@ export async function GET(
     book,
     detected_characters,
     flagged_count: flaggedCount,
-    line_count: lines?.length ?? 0,
+    line_count: lines.length,
   });
+}
+
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { user, error } = await requireUser();
+  if (!user) return error;
+
+  const { id } = await params;
+  const supabase = await createClient();
+  const admin = createAdminClient();
+
+  const { data: book, error: bookError } = await supabase
+    .from("books")
+    .select("id, title, manuscript_path")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (bookError) {
+    return NextResponse.json({ error: bookError.message }, { status: 500 });
+  }
+  if (!book) {
+    return NextResponse.json({ error: "Book not found" }, { status: 404 });
+  }
+
+  if (book.manuscript_path) {
+    const { error: storageError } = await admin.storage
+      .from("manuscripts")
+      .remove([book.manuscript_path]);
+    if (storageError) {
+      console.warn("Manuscript storage delete failed:", storageError.message);
+    }
+  }
+
+  const { error: deleteError } = await admin.from("books").delete().eq("id", id);
+  if (deleteError) {
+    return NextResponse.json({ error: deleteError.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true, title: book.title });
 }

@@ -1,6 +1,8 @@
 import type { EngineCharacter, TaggedLine } from "./types";
 import { CHAPTER_HEADING_RE } from "./regex";
 
+export type TaggedLineForAi = TaggedLine & { ai_reviewed?: boolean };
+
 export interface SceneChunk {
   scene_id: number;
   start_line: number;
@@ -10,7 +12,7 @@ export interface SceneChunk {
 
 const SCENE_BREAK_NARRATOR_RUN = 3;
 
-export function groupLinesIntoScenes(taggedLines: TaggedLine[]): SceneChunk[] {
+export function groupLinesIntoScenes(taggedLines: TaggedLineForAi[]): SceneChunk[] {
   const scenes: SceneChunk[] = [];
   let sceneStart = 0;
   let consecutiveNarrator = 0;
@@ -36,7 +38,7 @@ export function groupLinesIntoScenes(taggedLines: TaggedLine[]): SceneChunk[] {
         scene_id: scenes.length,
         start_line: sceneStart,
         end_line: i,
-        has_flags: sceneLines.some((l) => l.flag_reason),
+        has_flags: sceneLines.some((l) => l.flag_reason && !l.ai_reviewed),
       });
       sceneStart = i;
     }
@@ -48,7 +50,7 @@ export function groupLinesIntoScenes(taggedLines: TaggedLine[]): SceneChunk[] {
       scene_id: scenes.length,
       start_line: sceneStart,
       end_line: taggedLines.length,
-      has_flags: sceneLines.some((l) => l.flag_reason),
+      has_flags: sceneLines.some((l) => l.flag_reason && !l.ai_reviewed),
     });
   }
 
@@ -56,15 +58,16 @@ export function groupLinesIntoScenes(taggedLines: TaggedLine[]): SceneChunk[] {
 }
 
 export function buildAttributionPrompt(
-  sceneLines: TaggedLine[],
+  sceneLines: TaggedLineForAi[],
   roster: EngineCharacter[],
   flaggedIndices: number[]
 ): string {
   const rosterText = roster
-    .map(
-      (c) =>
-        `- ${c.canonical_name} (${c.gender}) — also known as: ${c.aliases.join(", ")}`
-    )
+    .map((c) => {
+      const aliases =
+        c.aliases.length > 0 ? c.aliases.join(", ") : "(none)";
+      return `- ${c.canonical_name} (${c.gender}) — also known as: ${aliases}`;
+    })
     .join("\n");
 
   let sceneText = "";
@@ -92,7 +95,7 @@ Important rules:
 - Consider conversation flow: in a 2-person dialogue, speakers usually alternate
 - Watch for scene transitions where new characters arrive
 
-Return ONLY a JSON object in this exact format, with no additional text:
+Respond with ONLY valid JSON, no markdown or explanation:
 {
   "attributions": [
     {"line_index": 0, "speaker": "Nikki Sands", "confidence": "high"}
@@ -103,17 +106,65 @@ Only include line indices that were marked NEEDS REVIEW. Confidence should be
 "high", "medium", or "low" based on how certain you are.`;
 }
 
+function parseAttributionJson(text: string): {
+  attributions: { line_index: number; speaker: string; confidence: string }[];
+} {
+  let cleaned = text.trim();
+  cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (Array.isArray(parsed.attributions)) return parsed;
+    if (Array.isArray(parsed)) return { attributions: parsed };
+  } catch {
+    // fall through
+  }
+
+  const objStart = cleaned.indexOf("{");
+  const objEnd = cleaned.lastIndexOf("}");
+  if (objStart >= 0 && objEnd > objStart) {
+    try {
+      const parsed = JSON.parse(cleaned.slice(objStart, objEnd + 1));
+      if (Array.isArray(parsed.attributions)) return parsed;
+    } catch {
+      // fall through
+    }
+  }
+
+  const arrayMatch = cleaned.match(/"attributions"\s*:\s*(\[[\s\S]*?\])\s*[,}]/);
+  if (arrayMatch) {
+    try {
+      const attributions = JSON.parse(arrayMatch[1]);
+      if (Array.isArray(attributions)) return { attributions };
+    } catch {
+      // fall through
+    }
+  }
+
+  throw new Error("Model returned non-JSON response");
+}
+
 export async function callClaudeForAttribution(
   prompt: string,
   apiKey: string
 ): Promise<{ attributions: { line_index: number; speaker: string; confidence: string }[] }> {
   const Anthropic = (await import("@anthropic-ai/sdk")).default;
   const client = new Anthropic({ apiKey });
+  const model = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6";
 
   const response = await client.messages.create({
-    model: "claude-sonnet-4-5",
-    max_tokens: 2048,
+    model,
+    max_tokens: 4096,
+    system:
+      "You attribute dialogue in novels. Always respond with a single valid JSON object only.",
     messages: [{ role: "user", content: prompt }],
+  }).catch((e: { status?: number; message?: string }) => {
+    if (e.status === 404 && String(e.message).includes("model:")) {
+      throw new Error(
+        `Claude model "${model}" not found. Set ANTHROPIC_MODEL=claude-sonnet-4-6 in .env.local`
+      );
+    }
+    throw e;
   });
 
   const block = response.content[0];
@@ -121,34 +172,44 @@ export async function callClaudeForAttribution(
     throw new Error("Unexpected response type");
   }
 
-  let text = block.text.trim();
-  text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-
-  return JSON.parse(text);
+  return parseAttributionJson(block.text);
 }
 
 export async function runAiAssistedPass(
-  taggedLines: TaggedLine[],
+  taggedLines: TaggedLineForAi[],
   roster: EngineCharacter[],
-  apiKey: string
+  apiKey: string,
+  options?: { maxScenes?: number }
 ): Promise<{
-  lines: TaggedLine[];
+  lines: TaggedLineForAi[];
   scenes_total: number;
   scenes_processed: number;
   lines_updated: number;
   api_calls: number;
+  processed_line_indices: number[];
+  has_more: boolean;
+  errors: string[];
 }> {
   const scenes = groupLinesIntoScenes(taggedLines);
   let scenesProcessed = 0;
   let linesUpdated = 0;
   let apiCalls = 0;
+  let scenesAttempted = 0;
+  const processedLineIndices = new Set<number>();
+  const errors: string[] = [];
 
   for (const scene of scenes) {
     if (!scene.has_flags) continue;
 
+    if (options?.maxScenes && scenesAttempted >= options.maxScenes) {
+      break;
+    }
+
+    scenesAttempted++;
+
     const sceneLines = taggedLines.slice(scene.start_line, scene.end_line);
     const flaggedIndices = sceneLines
-      .map((l, i) => (l.flag_reason ? i : -1))
+      .map((l, i) => (l.flag_reason && !l.ai_reviewed ? i : -1))
       .filter((i) => i >= 0);
 
     if (flaggedIndices.length === 0) continue;
@@ -163,11 +224,13 @@ export async function runAiAssistedPass(
         const localIdx = attr.line_index;
         const globalIdx = scene.start_line + localIdx;
         if (globalIdx < 0 || globalIdx >= taggedLines.length) continue;
+        if (!flaggedIndices.includes(localIdx)) continue;
 
         const oldSpeaker = taggedLines[globalIdx].speaker;
         const newSpeaker = attr.speaker;
         taggedLines[globalIdx].speaker = newSpeaker;
-        taggedLines[globalIdx].confidence = (attr.confidence as TaggedLine["confidence"]) ?? "medium";
+        taggedLines[globalIdx].confidence =
+          (attr.confidence as TaggedLine["confidence"]) ?? "medium";
         taggedLines[globalIdx].flag_reason =
           oldSpeaker !== newSpeaker
             ? `ai_reviewed (was: ${taggedLines[globalIdx].flag_reason}; changed: ${oldSpeaker} → ${newSpeaker})`
@@ -176,11 +239,26 @@ export async function runAiAssistedPass(
         if (oldSpeaker !== newSpeaker) linesUpdated++;
       }
 
+      for (const localIdx of flaggedIndices) {
+        processedLineIndices.add(scene.start_line + localIdx);
+      }
+
       scenesProcessed++;
     } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`Scene ${scene.scene_id}: ${msg}`);
       console.error(`AI attribution failed for scene ${scene.scene_id}:`, e);
     }
   }
+
+  const has_more = scenes.some((s) => {
+    for (let i = s.start_line; i < s.end_line; i++) {
+      if (taggedLines[i].flag_reason && !processedLineIndices.has(i)) {
+        return true;
+      }
+    }
+    return false;
+  });
 
   return {
     lines: taggedLines,
@@ -188,5 +266,8 @@ export async function runAiAssistedPass(
     scenes_processed: scenesProcessed,
     lines_updated: linesUpdated,
     api_calls: apiCalls,
+    processed_line_indices: [...processedLineIndices],
+    has_more,
+    errors,
   };
 }

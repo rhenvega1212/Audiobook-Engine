@@ -38,7 +38,9 @@ export default function RootLayout({
       lang="en"
       className={`${lora.variable} ${poppins.variable} ${jetbrainsMono.variable}`}
     >
-      <body className="min-h-screen antialiased">
+      <body
+        className={`${poppins.className} min-h-screen bg-cream text-ink antialiased`}
+      >
         {children}
         <Toaster position="top-right" richColors />
       </body>

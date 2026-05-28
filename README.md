@@ -18,7 +18,17 @@ After migrations `20250523000002_seed_wine_lovers.sql`:
 npm run seed:voices
 ```
 
-Requires `ELEVENLABS_API_KEY` in `.env.local`.
+Requires `ELEVENLABS_API_KEY` in `.env.local`. Matches ElevenLabs display names by prefix (e.g. `Eliza` → `Eliza - Elegant & Lovely`).
+
+## Maintenance scripts
+
+```bash
+# End-to-end workflow test (uses manuscript in ~/Downloads)
+npx tsx scripts/workflow-test.ts
+
+# Remove mis-parsed character rows from Wine Lover's Mysteries
+npx tsx scripts/cleanup-junk-characters.ts
+```
 
 ## Deploy (Vercel)
 

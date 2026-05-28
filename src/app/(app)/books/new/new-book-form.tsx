@@ -16,6 +16,8 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import type { PenName, Series } from "@/lib/types/database";
 
+type UploadPhase = "idle" | "uploading" | "analyzing" | "done";
+
 export function NewBookForm({
   penNames,
   series: allSeries,
@@ -28,35 +30,99 @@ export function NewBookForm({
   const [seriesId, setSeriesId] = useState("");
   const [title, setTitle] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [phase, setPhase] = useState<UploadPhase>("idle");
 
   const filteredSeries = penNameId
     ? allSeries.filter((s) => s.pen_name_id === penNameId)
     : allSeries;
 
+  const loading = phase === "uploading" || phase === "analyzing";
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!file || !seriesId || !title) return;
 
-    setLoading(true);
+    setPhase("uploading");
     const formData = new FormData();
     formData.append("series_id", seriesId);
     formData.append("title", title);
     formData.append("file", file);
 
-    const res = await fetch("/api/books", { method: "POST", body: formData });
-    setLoading(false);
+    let bookId: string | undefined;
+    try {
+      const res = await fetch("/api/books", { method: "POST", body: formData });
+      const data = await res.json().catch(() => ({}));
 
-    if (!res.ok) {
-      const err = await res.json();
-      toast.error(err.error ?? "Upload failed");
-      return;
+      if (!res.ok) {
+        toast.error(
+          (data as { error?: string }).error ?? "Upload failed"
+        );
+        setPhase("idle");
+        return;
+      }
+
+      bookId =
+        (data as { id?: string }).id ??
+        (data as { book?: { id?: string } }).book?.id;
+
+      if (!bookId) {
+        toast.error("Upload succeeded but book id was missing");
+        setPhase("idle");
+        return;
+      }
+
+      toast.success("Manuscript uploaded");
+      setPhase("analyzing");
+
+      const analyzeRes = await fetch(`/api/books/${bookId}/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_ai_review: false }),
+      });
+      const analyzeData = await analyzeRes.json().catch(() => ({}));
+
+      if (!analyzeRes.ok) {
+        toast.error(
+          (analyzeData as { error?: string }).error ??
+            "Analysis failed — open the book and click Re-run analysis"
+        );
+        router.push(`/books/${bookId}`);
+        router.refresh();
+        setPhase("idle");
+        return;
+      }
+
+      const summary = analyzeData as {
+        total_lines?: number;
+        flagged_count?: number;
+        status?: string;
+        ai_review?: {
+          lines_updated?: number;
+          lines_cleared?: number;
+        } | null;
+      };
+      const ai = summary.ai_review;
+      const aiPart =
+        ai?.lines_cleared != null
+          ? ` — AI cleared ${ai.lines_cleared} flagged lines`
+          : ai?.lines_updated
+            ? ` — AI reviewed ${ai.lines_updated} lines`
+            : "";
+      toast.success(
+        `Analysis complete — ${summary.total_lines ?? "?"} lines, ${summary.flagged_count ?? "?"} flagged${aiPart}`
+      );
+      setPhase("done");
+      router.push(`/books/${bookId}`);
+      router.refresh();
+    } catch {
+      toast.error(
+        bookId
+          ? "Analysis may have timed out — open the book and Re-run analysis"
+          : "Upload failed — try again"
+      );
+      if (bookId) router.push(`/books/${bookId}`);
+      setPhase("idle");
     }
-
-    const data = await res.json();
-    toast.success("Book uploaded and analysis started");
-    router.push(`/books/${data.id ?? data.book?.id}`);
-    router.refresh();
   }
 
   return (
@@ -65,7 +131,13 @@ export function NewBookForm({
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <Label>Pen name</Label>
-            <Select value={penNameId} onValueChange={(v) => { setPenNameId(v); setSeriesId(""); }}>
+            <Select
+              value={penNameId}
+              onValueChange={(v) => {
+                setPenNameId(v);
+                setSeriesId("");
+              }}
+            >
               <SelectTrigger>
                 <SelectValue placeholder="Select pen name" />
               </SelectTrigger>
@@ -81,7 +153,11 @@ export function NewBookForm({
 
           <div>
             <Label>Series</Label>
-            <Select value={seriesId} onValueChange={setSeriesId} disabled={!penNameId}>
+            <Select
+              value={seriesId}
+              onValueChange={setSeriesId}
+              disabled={!penNameId}
+            >
               <SelectTrigger>
                 <SelectValue placeholder="Select series" />
               </SelectTrigger>
@@ -115,10 +191,20 @@ export function NewBookForm({
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               required
             />
+            {file && (
+              <p className="text-xs text-slate mt-1">
+                {(file.size / 1024 / 1024).toFixed(2)} MB — large books may take
+                30–60 seconds to analyze
+              </p>
+            )}
           </div>
 
           <Button type="submit" disabled={loading}>
-            {loading ? "Uploading…" : "Upload & analyze"}
+            {phase === "uploading"
+              ? "Uploading manuscript…"
+              : phase === "analyzing"
+                ? "Analyzing characters (please wait)…"
+                : "Upload & analyze"}
           </Button>
         </form>
       </CardContent>

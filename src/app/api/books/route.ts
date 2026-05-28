@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api/auth";
-import { analyzeBook } from "@/lib/books/analyze-book";
 
 export async function GET() {
   const { user, error } = await requireUser();
@@ -85,15 +84,13 @@ export async function POST(request: Request) {
     .update({ manuscript_path: path })
     .eq("id", book.id);
 
-  try {
-    const summary = await analyzeBook(book.id);
-    return NextResponse.json({ ...book, manuscript_path: path, ...summary }, { status: 201 });
-  } catch (e) {
-    const message = e instanceof Error ? e.message : "Analysis failed";
-    await admin.from("books").update({ status: "uploaded" }).eq("id", book.id);
-    return NextResponse.json(
-      { book: { ...book, manuscript_path: path }, error: message },
-      { status: 201 }
-    );
-  }
+  return NextResponse.json(
+    {
+      id: book.id,
+      ...book,
+      manuscript_path: path,
+      analyze_required: true,
+    },
+    { status: 201 }
+  );
 }

@@ -22,12 +22,20 @@ export type Series = {
   pen_names?: { name: string };
 };
 
+export type CharacterRole =
+  | "narrator"
+  | "protagonist"
+  | "series_regular"
+  | "recurring"
+  | "guest";
+
 export type Character = {
   id: string;
   series_id: string;
   canonical_name: string;
   aliases: string[];
   gender: "male" | "female" | "unknown";
+  role: CharacterRole;
   description: string | null;
   elevenlabs_voice_id: string | null;
   elevenlabs_voice_name: string | null;
@@ -63,6 +71,7 @@ export type TaggedLine = {
   flag_reason: string | null;
   ai_reviewed: boolean;
   human_reviewed: boolean;
+  excluded_from_export: boolean;
   created_at: string;
 };
 

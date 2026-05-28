@@ -21,7 +21,7 @@ cross join (values
   ('Susan', array['Susan']::text[], 'female', null, 'Janet'),
   ('Andres', array['Andres']::text[], 'male', null, 'Andres'),
   ('Pamela', array['Pamela']::text[], 'female', null, 'Cameo'),
-  ('Jennifer', array['Jennifer']::text[], 'female', null, 'Brittany'),
+  ('Jennifer', array['Jennifer']::text[], 'female', null, 'Britney'),
   ('Blake', array['Blake']::text[], 'male', null, 'Kel'),
   ('Marty', array['Marty']::text[], 'male', 'Dominant, Firm', 'Adam')
 ) as v(canonical_name, aliases, gender, voice_style, voice_name)

@@ -3,11 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "WATCHPACK_POLLING=true next dev",
+    "dev:clean": "rm -rf .next && WATCHPACK_POLLING=true next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "seed:voices": "npx tsx scripts/seed-voice-ids.ts"
+    "seed:voices": "npx tsx scripts/seed-voice-ids.ts",
+    "test:workflow": "npx tsx scripts/workflow-test.ts --keep",
+    "cleanup:characters": "npx tsx scripts/cleanup-junk-characters.ts",
+    "test:workflow": "npx tsx scripts/workflow-test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.98.0",

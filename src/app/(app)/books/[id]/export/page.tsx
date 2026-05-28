@@ -1,5 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
+import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
 import { notFound } from "next/navigation";
+import { displayBookTitle } from "@/lib/books/display-title";
 import { ExportClient } from "./export-client";
 import { resolveSpokenLine } from "@/lib/pronunciation/apply";
 
@@ -26,27 +28,53 @@ export default async function ExportPage({
 
   const dict = dictionary ?? [];
 
-  const { data: lines } = await supabase
-    .from("tagged_lines")
-    .select(
-      "speaker_label, line_text, spoken_text, characters(elevenlabs_voice_name, voice_style)"
-    )
-    .eq("book_id", id)
-    .order("line_order")
-    .limit(50);
+  let dbLines: {
+    speaker_label: string;
+    line_text: string;
+    spoken_text: string | null;
+    excluded_from_export?: boolean;
+    speaker_character_id: string | null;
+  }[];
+
+  try {
+    dbLines = await fetchAllTaggedLines(
+      supabase,
+      id,
+      "speaker_label, line_text, spoken_text, excluded_from_export, speaker_character_id"
+    );
+  } catch {
+    dbLines = await fetchAllTaggedLines(
+      supabase,
+      id,
+      "speaker_label, line_text, spoken_text, speaker_character_id"
+    );
+  }
+
+  const { data: characters } = await supabase
+    .from("characters")
+    .select("id, canonical_name, elevenlabs_voice_name")
+    .eq("series_id", book.series_id);
+
+  const roster = characters ?? [];
+  const exportable = dbLines.filter((l) => !l.excluded_from_export);
+  const excludedCount = dbLines.length - exportable.length;
 
   return (
     <ExportClient
       bookId={id}
-      bookTitle={book.title}
+      bookTitle={displayBookTitle(book.title)}
       status={book.status}
-      previewLines={(lines ?? []).map((l) => ({
-        speaker: l.speaker_label,
-        voice:
-          (l.characters as { elevenlabs_voice_name?: string } | null)
-            ?.elevenlabs_voice_name ?? "—",
-        line: resolveSpokenLine(l.line_text, l.spoken_text, dict).slice(0, 100),
-      }))}
+      totalLines={dbLines.length}
+      exportableLines={exportable.length}
+      excludedCount={excludedCount}
+      previewLines={exportable.slice(0, 50).map((l) => {
+        const char = roster.find((c) => c.id === l.speaker_character_id);
+        return {
+          speaker: l.speaker_label,
+          voice: char?.elevenlabs_voice_name ?? "—",
+          line: resolveSpokenLine(l.line_text, l.spoken_text, dict).slice(0, 100),
+        };
+      })}
     />
   );
 }

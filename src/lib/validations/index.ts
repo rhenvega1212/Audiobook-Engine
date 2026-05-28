@@ -10,11 +10,20 @@ export const seriesSchema = z.object({
   description: z.string().max(1000).optional().nullable(),
 });
 
+export const characterRoleSchema = z.enum([
+  "narrator",
+  "protagonist",
+  "series_regular",
+  "recurring",
+  "guest",
+]);
+
 export const characterSchema = z.object({
   series_id: z.string().uuid(),
   canonical_name: z.string().min(1).max(200),
   aliases: z.array(z.string()).optional(),
   gender: z.enum(["male", "female", "unknown"]).optional(),
+  role: characterRoleSchema.optional(),
   description: z.string().max(1000).optional().nullable(),
 });
 
@@ -22,6 +31,7 @@ export const characterPatchSchema = z.object({
   canonical_name: z.string().min(1).max(200).optional(),
   aliases: z.array(z.string()).optional(),
   gender: z.enum(["male", "female", "unknown"]).optional(),
+  role: characterRoleSchema.optional(),
   elevenlabs_voice_id: z.string().nullable().optional(),
   elevenlabs_voice_name: z.string().nullable().optional(),
   voice_style: z.string().nullable().optional(),
@@ -38,6 +48,33 @@ export const lineUpdateSchema = z.object({
   speaker_label: z.string().min(1).optional(),
   human_reviewed: z.boolean().optional(),
   spoken_text: z.string().nullable().optional(),
+  flag_reason: z.string().nullable().optional(),
+  excluded_from_export: z.boolean().optional(),
+});
+
+export const lineBulkUpdateSchema = z.object({
+  line_ids: z.array(z.string().uuid()).min(1).max(500),
+  speaker_character_id: z.string().uuid().nullable().optional(),
+  speaker_label: z.string().min(1).optional(),
+  excluded_from_export: z.boolean().optional(),
+  flag_reason: z.string().nullable().optional(),
+  human_reviewed: z.boolean().optional(),
+});
+
+export const lineSplitSchema = z.object({
+  line_id: z.string().uuid(),
+  start: z.number().int().min(0),
+  end: z.number().int().min(0),
+  speaker_character_id: z.string().uuid().nullable(),
+  speaker_label: z.string().min(1),
+});
+
+export const lineMergeSchema = z.object({
+  line_ids: z.array(z.string().uuid()).min(2).max(100),
+});
+
+export const lineDeleteSchema = z.object({
+  line_ids: z.array(z.string().uuid()).min(1).max(500),
 });
 
 export const pronunciationSchema = z.object({

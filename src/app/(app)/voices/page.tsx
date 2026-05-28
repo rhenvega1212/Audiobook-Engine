@@ -6,7 +6,7 @@ export default function VoicesPage() {
     <>
       <PageHeader
         title="Voice library"
-        description="Browse ElevenLabs voices available for casting."
+        description="Search your ElevenLabs account or browse the public library to import new voices."
       />
       <VoicesClient />
     </>

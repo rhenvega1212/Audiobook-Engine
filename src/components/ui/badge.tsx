@@ -15,6 +15,11 @@ const badgeVariants = cva(
         uploaded: "bg-slate/10 text-slate",
         reviewing: "bg-warning/10 text-warning",
         ready: "bg-success/10 text-success",
+        lead: "bg-burgundy/10 text-burgundy",
+        main: "bg-burgundy/10 text-dark-red",
+        side: "bg-teal/10 text-teal",
+        guest: "bg-slate/10 text-slate",
+        narrator: "bg-warm-sand text-slate",
       },
     },
     defaultVariants: {
@@ -24,12 +29,12 @@ const badgeVariants = cva(
 );
 
 export interface BadgeProps
-  extends React.HTMLAttributes<HTMLDivElement>,
+  extends React.HTMLAttributes<HTMLSpanElement>,
     VariantProps<typeof badgeVariants> {}
 
 function Badge({ className, variant, ...props }: BadgeProps) {
   return (
-    <div className={cn(badgeVariants({ variant }), className)} {...props} />
+    <span className={cn(badgeVariants({ variant }), className)} {...props} />
   );
 }
 

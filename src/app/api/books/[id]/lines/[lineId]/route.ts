@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api/auth";
 import { lineUpdateSchema } from "@/lib/validations";
+import { updateBookStatus } from "@/lib/books/compute-book-status";
 
 export async function POST(
   request: Request,
@@ -19,12 +21,14 @@ export async function POST(
   }
 
   const supabase = await createClient();
+  const updates = {
+    ...parsed.data,
+    human_reviewed: parsed.data.human_reviewed ?? true,
+  };
+
   const { data, error: dbError } = await supabase
     .from("tagged_lines")
-    .update({
-      ...parsed.data,
-      human_reviewed: parsed.data.human_reviewed ?? true,
-    })
+    .update(updates)
     .eq("id", lineId)
     .eq("book_id", id)
     .select()
@@ -34,5 +38,8 @@ export async function POST(
     return NextResponse.json({ error: dbError.message }, { status: 500 });
   }
 
-  return NextResponse.json(data);
+  const admin = createAdminClient();
+  const status = await updateBookStatus(admin, id);
+
+  return NextResponse.json({ ...data, book_status: status });
 }

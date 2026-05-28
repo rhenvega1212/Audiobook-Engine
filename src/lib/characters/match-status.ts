@@ -14,6 +14,7 @@ export interface DetectedCharacter {
   matched_character_id: string | null;
   matched_character_name: string | null;
   suggested_alias_of: string | null;
+  voice_name: string | null;
 }
 
 function levenshtein(a: string, b: string): number {

@@ -1,13 +1,48 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createEngineCharacter } from "@/lib/engine/types";
-import { processManuscript } from "@/lib/engine/rules-engine";
-import mammoth from "mammoth";
+import { processManuscriptFromParagraphs } from "@/lib/engine/rules-engine";
+import {
+  extractManuscriptParagraphs,
+  measureManuscriptCoverage,
+} from "@/lib/engine/manuscript-extract";
+import { isValidNewCharacter } from "@/lib/engine/unknown-speaker";
+import { findCharacterBySpeaker } from "@/lib/characters/resolve-character";
+import { resolveMatchStatus } from "@/lib/characters/match-status";
+import { updateBookStatus } from "@/lib/books/compute-book-status";
+import { runAiReviewForBook } from "@/lib/books/run-ai-review";
+import { rebuildAutoBookChapters } from "@/lib/books/book-chapters";
+import type { Character } from "@/lib/types/database";
 
-export async function analyzeBook(bookId: string) {
+const INSERT_BATCH = 500;
+const MIN_WORD_COVERAGE = 0.92;
+
+export async function analyzeBook(bookId: string, options?: { runAiReview?: boolean }) {
   const admin = createAdminClient();
 
   await admin.from("books").update({ status: "analyzing" }).eq("id", bookId);
 
+  try {
+    return await runAnalysis(admin, bookId, options);
+  } catch (e) {
+    const { count } = await admin
+      .from("tagged_lines")
+      .select("*", { count: "exact", head: true })
+      .eq("book_id", bookId);
+
+    if ((count ?? 0) > 0) {
+      await updateBookStatus(admin, bookId);
+    } else {
+      await admin.from("books").update({ status: "uploaded" }).eq("id", bookId);
+    }
+    throw e;
+  }
+}
+
+async function runAnalysis(
+  admin: ReturnType<typeof createAdminClient>,
+  bookId: string,
+  options?: { runAiReview?: boolean }
+) {
   const { data: book, error: bookError } = await admin
     .from("books")
     .select("*, series_id")
@@ -36,20 +71,19 @@ export async function analyzeBook(bookId: string) {
   }
 
   const buffer = Buffer.from(await fileData.arrayBuffer());
-  const { value: text } = await mammoth.extractRawText({ buffer });
+  const { paragraphs } = await extractManuscriptParagraphs(buffer);
+  const result = processManuscriptFromParagraphs(paragraphs, roster);
 
-  const result = processManuscript(text, roster);
+  const coverage = measureManuscriptCoverage(paragraphs, result.lines);
+  if (coverage.word_coverage < MIN_WORD_COVERAGE) {
+    console.warn(
+      `Manuscript coverage low for book ${bookId}: ${(coverage.word_coverage * 100).toFixed(1)}% words preserved`,
+      { thin_paragraphs: coverage.thin_paragraphs.slice(0, 5) }
+    );
+  }
 
   await admin.from("tagged_lines").delete().eq("book_id", bookId);
   await admin.from("book_characters").delete().eq("book_id", bookId);
-
-  const speakerToCharId = new Map<string, string>();
-  for (const c of chars ?? []) {
-    speakerToCharId.set(c.canonical_name, c.id);
-    for (const alias of c.aliases ?? []) {
-      speakerToCharId.set(alias, c.id);
-    }
-  }
 
   const lineCounts = new Map<string, number>();
   const rows = result.lines.map((line, idx) => {
@@ -58,12 +92,15 @@ export async function analyzeBook(bookId: string) {
 
     if (line.speaker === "Narrator") {
       speakerLabel = "Narrator";
+      const narrator = findCharacterBySpeaker("Narrator", (chars ?? []) as Character[]);
+      if (narrator) {
+        speakerCharId = narrator.id;
+        lineCounts.set(narrator.id, (lineCounts.get(narrator.id) ?? 0) + 1);
+      }
     } else if (line.speaker === "UNKNOWN") {
       speakerLabel = "UNKNOWN";
     } else {
-      const char = (chars ?? []).find((c) =>
-        c.canonical_name.toLowerCase() === line.speaker.toLowerCase()
-      );
+      const char = findCharacterBySpeaker(line.speaker, (chars ?? []) as Character[]);
       if (char) {
         speakerCharId = char.id;
         speakerLabel = char.canonical_name;
@@ -85,12 +122,22 @@ export async function analyzeBook(bookId: string) {
     };
   });
 
-  if (rows.length > 0) {
-    const { error: insertError } = await admin.from("tagged_lines").insert(rows);
+  for (let i = 0; i < rows.length; i += INSERT_BATCH) {
+    const batch = rows.slice(i, i + INSERT_BATCH);
+    const { error: insertError } = await admin.from("tagged_lines").insert(batch);
     if (insertError) throw new Error(insertError.message);
   }
 
   for (const unknown of result.unknown_speakers) {
+    const lineCount = result.lines.filter((l) => l.speaker === unknown).length;
+    if (!isValidNewCharacter(unknown, lineCount)) continue;
+
+    const match = resolveMatchStatus(unknown, (chars ?? []) as Character[]);
+    if (match.character && match.status !== "new") {
+      lineCounts.set(match.character.id, (lineCounts.get(match.character.id) ?? 0) + lineCount);
+      continue;
+    }
+
     const { data: existing } = await admin
       .from("characters")
       .select("id")
@@ -105,14 +152,16 @@ export async function analyzeBook(bookId: string) {
           series_id: book.series_id,
           canonical_name: unknown,
           gender: "unknown",
+          role: "guest",
         })
         .select("id")
         .single();
 
       if (newChar) {
-        const count = result.lines.filter((l) => l.speaker === unknown).length;
-        lineCounts.set(newChar.id, count);
+        lineCounts.set(newChar.id, lineCount);
       }
+    } else {
+      lineCounts.set(existing.id, (lineCounts.get(existing.id) ?? 0) + lineCount);
     }
   }
 
@@ -126,16 +175,76 @@ export async function analyzeBook(bookId: string) {
     await admin.from("book_characters").insert(bookCharRows);
   }
 
-  const allCast = (chars ?? []).every((c) => c.elevenlabs_voice_id);
-  const hasFlags = result.flagged_count > 0;
-  const newStatus = allCast && !hasFlags ? "ready_for_review" : "needs_casting";
+  try {
+    await rebuildAutoBookChapters(admin, bookId);
+  } catch (e) {
+    console.warn("Chapter sync skipped:", e);
+  }
 
-  await admin.from("books").update({ status: newStatus }).eq("id", bookId);
+  let status = await updateBookStatus(admin, bookId);
+
+  let aiReview: Awaited<ReturnType<typeof runAiReviewForBook>> | null = null;
+  const shouldRunAi =
+    options?.runAiReview === true &&
+    !!process.env.ANTHROPIC_API_KEY &&
+    result.flagged_count > 0;
+
+  if (shouldRunAi) {
+    try {
+      let hasMore = true;
+      let totalUpdated = 0;
+      let totalCleared = 0;
+      let scenesProcessed = 0;
+      const errors: string[] = [];
+
+      let lastBatch: Awaited<ReturnType<typeof runAiReviewForBook>> | null =
+        null;
+
+      while (hasMore) {
+        const batch = await runAiReviewForBook(
+          admin,
+          bookId,
+          process.env.ANTHROPIC_API_KEY!,
+          { maxScenes: 12 }
+        );
+        lastBatch = batch;
+        totalUpdated += batch.lines_updated;
+        totalCleared += batch.lines_cleared;
+        scenesProcessed += batch.scenes_processed;
+        errors.push(...(batch.errors ?? []));
+        hasMore = batch.has_more ?? false;
+        if (hasMore && batch.scenes_processed === 0) break;
+      }
+
+      aiReview = {
+        lines_updated: totalUpdated,
+        lines_cleared: totalCleared,
+        scenes_processed: scenesProcessed,
+        status: await updateBookStatus(admin, bookId),
+        scenes_total: lastBatch?.scenes_total ?? 0,
+        api_calls: lastBatch?.api_calls ?? 0,
+        has_more: false,
+        pending_flagged: 0,
+        errors,
+      };
+      status = aiReview.status;
+    } catch (e) {
+      console.error("Auto AI review failed:", e);
+    }
+  }
 
   return {
     total_lines: result.total_lines,
     flagged_count: result.flagged_count,
     unknown_speakers: result.unknown_speakers,
-    status: newStatus,
+    word_coverage: coverage.word_coverage,
+    status,
+    ai_review: aiReview
+      ? {
+          lines_updated: aiReview.lines_updated,
+          lines_cleared: aiReview.lines_cleared,
+          scenes_processed: aiReview.scenes_processed,
+        }
+      : null,
   };
 }

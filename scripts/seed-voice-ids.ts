@@ -4,6 +4,7 @@
  */
 import { readFileSync } from "fs";
 import { resolve } from "path";
+import { matchElevenLabsVoice } from "../src/lib/elevenlabs/match-voice";
 
 function loadEnv() {
   const path = resolve(process.cwd(), ".env.local");
@@ -16,18 +17,6 @@ function loadEnv() {
 }
 
 loadEnv();
-
-const VOICE_NAMES = [
-  "Bella",
-  "Eliza",
-  "Adam",
-  "Vega",
-  "Janet",
-  "Andres",
-  "Cameo",
-  "Brittany",
-  "Kel",
-];
 
 async function main() {
   const elevenKey = process.env.ELEVENLABS_API_KEY;
@@ -45,14 +34,10 @@ async function main() {
   const voicesData = (await voicesRes.json()) as {
     voices: { voice_id: string; name: string }[];
   };
-
-  const byName = new Map<string, { voice_id: string; name: string }>();
-  for (const v of voicesData.voices ?? []) {
-    byName.set(v.name.toLowerCase(), v);
-  }
+  const voices = voicesData.voices ?? [];
 
   const charsRes = await fetch(
-    `${supabaseUrl}/rest/v1/characters?select=id,canonical_name,elevenlabs_voice_name&elevenlabs_voice_name=not.is.null`,
+    `${supabaseUrl}/rest/v1/characters?select=id,canonical_name,elevenlabs_voice_name,voice_style&elevenlabs_voice_name=not.is.null`,
     {
       headers: {
         apikey: serviceKey,
@@ -64,14 +49,20 @@ async function main() {
     id: string;
     canonical_name: string;
     elevenlabs_voice_name: string;
+    voice_style: string | null;
   }[];
+
+  let matched = 0;
+  let missed = 0;
 
   for (const char of characters) {
     const voiceName = char.elevenlabs_voice_name;
     if (!voiceName) continue;
-    const match = byName.get(voiceName.toLowerCase());
+
+    const match = matchElevenLabsVoice(voiceName, voices, char.voice_style);
     if (!match) {
       console.warn(`No ElevenLabs voice for: ${voiceName} (${char.canonical_name})`);
+      missed++;
       continue;
     }
 
@@ -93,11 +84,15 @@ async function main() {
     );
 
     if (patchRes.ok) {
-      console.log(`✓ ${char.canonical_name} → ${match.name} (${match.voice_id})`);
+      console.log(`✓ ${char.canonical_name} → ${match.name}`);
+      matched++;
     } else {
       console.error(`✗ ${char.canonical_name}:`, await patchRes.text());
+      missed++;
     }
   }
+
+  console.log(`\nDone: ${matched} matched, ${missed} missed`);
 }
 
 main();

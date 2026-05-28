@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireAdmin } from "@/lib/auth/admin";
+import { requireTeamManage } from "@/lib/auth/admin";
 import { adminUpdatePasswordSchema } from "@/lib/validations";
 
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { user: adminUser, error } = await requireAdmin();
+  const { user: adminUser, error } = await requireTeamManage();
   if (error) return error;
 
   const { id } = await params;
@@ -40,7 +40,7 @@ export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { user: adminUser, error } = await requireAdmin();
+  const { user: adminUser, error } = await requireTeamManage();
   if (error) return error;
 
   const { id } = await params;

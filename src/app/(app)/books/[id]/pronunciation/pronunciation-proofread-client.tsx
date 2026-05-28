@@ -14,6 +14,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Card } from "@/components/ui/card";
+import { useLineAudioPlayer } from "@/components/audio/line-player";
+import { PerformLineRecorder } from "@/components/audio/perform-line-recorder";
 import {
   applyPronunciations,
   type PronunciationEntry,
@@ -28,6 +30,8 @@ type LineRow = {
   export_preview: string;
   has_dictionary_hit: boolean;
   has_override: boolean;
+  voice_id: string | null;
+  voice_name: string | null;
 };
 
 type Filter = "all" | "dictionary" | "overrides";
@@ -50,6 +54,7 @@ export function PronunciationProofreadClient({
   const [lines, setLines] = useState(initialLines);
   const [filter, setFilter] = useState<Filter>("dictionary");
   const [saving, setSaving] = useState<string | null>(null);
+  const { playingId, loadingId, playLine } = useLineAudioPlayer();
 
   const filtered = useMemo(() => {
     if (filter === "dictionary") {
@@ -135,6 +140,9 @@ export function PronunciationProofreadClient({
           </Select>
         </div>
         <Button asChild variant="secondary">
+          <Link href={`/books/${bookId}/listen`}>Listen to full manuscript</Link>
+        </Button>
+        <Button asChild variant="secondary">
           <Link href={`/books/${bookId}/export`}>Continue to export</Link>
         </Button>
       </div>
@@ -170,12 +178,38 @@ export function PronunciationProofreadClient({
             </div>
             <Button
               size="sm"
-              className="mt-2"
+              className="mt-2 mr-2"
               disabled={saving === line.id}
               onClick={() => saveLine(line.id, line.spoken_text)}
             >
               {saving === line.id ? "Saving…" : "Save line"}
             </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="mt-2"
+              disabled={!line.voice_id || loadingId !== null}
+              onClick={() =>
+                playLine(line.id, line.voice_id ?? "", line.export_preview)
+              }
+            >
+              {loadingId === line.id
+                ? "Generating…"
+                : playingId === line.id
+                  ? "Playing…"
+                  : "Listen"}
+            </Button>
+            {line.voice_id && (
+              <div className="mt-3">
+                <PerformLineRecorder
+                  lineId={line.id}
+                  voiceId={line.voice_id}
+                  voiceName={line.voice_name}
+                  spokenText={line.export_preview}
+                  compact
+                />
+              </div>
+            )}
           </Card>
         ))}
       </div>

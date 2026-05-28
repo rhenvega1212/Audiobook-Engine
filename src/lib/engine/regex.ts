@@ -8,5 +8,6 @@ export const DIALOGUE_TAG_START_RE = new RegExp(
   "i"
 );
 
+/** Line/paragraph starts a new chapter (import + studio navigation). */
 export const CHAPTER_HEADING_RE =
-  /^(CHAPTER|Chapter|PROLOGUE|EPILOGUE|\*\*\*|###)/;
+  /^(?:CHAPTER|Chapter|Chap\.?|PROLOGUE|Prologue|EPILOGUE|Epilogue|PART\s+(?:[IVXLCDM]+|\d+)|BOOK\s+\d+|INTRODUCTION|Introduction|\*\*\*|#{1,3}\s*)/i;

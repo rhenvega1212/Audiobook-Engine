@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { AppShell } from "@/components/layout/app-shell";
-import { isAdminEmail } from "@/lib/auth/admin";
+import { canAccessAdminArea } from "@/lib/auth/team-managers";
 
 export default async function AppLayout({
   children,
@@ -17,9 +17,11 @@ export default async function AppLayout({
     redirect("/login");
   }
 
-  if (isAdminEmail(user.email)) {
-    redirect("/admin/users");
-  }
+  const showTeamAccess = await canAccessAdminArea(user.email, user.id);
 
-  return <AppShell userEmail={user.email ?? ""}>{children}</AppShell>;
+  return (
+    <AppShell userEmail={user.email ?? ""} showTeamAccess={showTeamAccess}>
+      {children}
+    </AppShell>
+  );
 }

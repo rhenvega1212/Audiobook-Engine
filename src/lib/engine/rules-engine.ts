@@ -70,6 +70,22 @@ function extractSpeakerFromAttribution(
   return [null, "none"];
 }
 
+function emitNarration(
+  text: string,
+  paraNum: number,
+  results: TaggedLine[]
+): void {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  results.push({
+    speaker: "Narrator",
+    line: trimmed,
+    paragraph_num: paraNum,
+    confidence: "high",
+    flag_reason: null,
+  });
+}
+
 function splitParagraphIntoLines(
   paragraph: string,
   paraNum: number,
@@ -81,16 +97,7 @@ function splitParagraphIntoLines(
   const matches = [...paragraph.matchAll(DIALOGUE_RE)];
 
   if (matches.length === 0) {
-    const text = paragraph.trim();
-    if (text) {
-      results.push({
-        speaker: "Narrator",
-        line: text,
-        paragraph_num: paraNum,
-        confidence: "high",
-        flag_reason: null,
-      });
-    }
+    emitNarration(paragraph, paraNum, results);
     return results;
   }
 
@@ -110,16 +117,7 @@ function splitParagraphIntoLines(
     );
 
     if (preText) {
-      const cleaned = stripDialogueTag(preText);
-      if (cleaned) {
-        results.push({
-          speaker: "Narrator",
-          line: cleaned,
-          paragraph_num: paraNum,
-          confidence: "high",
-          flag_reason: null,
-        });
-      }
+      emitNarration(preText, paraNum, results);
     }
 
     const dialogueText = cleanDialogueLine(match[1]);
@@ -159,30 +157,16 @@ function splitParagraphIntoLines(
 
   const trailing = paragraph.slice(cursor).trim();
   if (trailing) {
-    const cleaned = stripDialogueTag(trailing);
-    if (cleaned) {
-      results.push({
-        speaker: "Narrator",
-        line: cleaned,
-        paragraph_num: paraNum,
-        confidence: "high",
-        flag_reason: null,
-      });
-    }
+    emitNarration(trailing, paraNum, results);
   }
 
   return results;
 }
 
-export function processManuscript(
-  text: string,
+export function processManuscriptFromParagraphs(
+  paragraphs: string[],
   roster: EngineCharacter[]
 ): ProcessResult {
-  const paragraphs = text
-    .split("\n\n")
-    .map((p) => p.trim())
-    .filter(Boolean);
-
   const allLines: TaggedLine[] = [];
   const detectedUnknownSpeakers = new Set<string>();
   let lastNamedSpeakers: Record<string, string> = {};
@@ -246,4 +230,17 @@ export function processManuscript(
     total_lines: allLines.length,
     flagged_count: allLines.filter((l) => l.flag_reason).length,
   };
+}
+
+export function processManuscript(
+  text: string,
+  roster: EngineCharacter[]
+): ProcessResult {
+  const paragraphs = text
+    .replace(/\r\n/g, "\n")
+    .split(/\n+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  return processManuscriptFromParagraphs(paragraphs, roster);
 }

@@ -1,29 +1,18 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api/auth";
+import { fetchMyVoices } from "@/lib/elevenlabs/api";
 
-export async function GET() {
+export async function GET(request: Request) {
   const { user, error } = await requireUser();
   if (!user) return error;
 
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "ELEVENLABS_API_KEY not configured" },
-      { status: 500 }
-    );
+  const search = new URL(request.url).searchParams.get("search") ?? undefined;
+
+  try {
+    const voices = await fetchMyVoices(search);
+    return NextResponse.json({ voices });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Failed to fetch voices";
+    return NextResponse.json({ error: message }, { status: 502 });
   }
-
-  const res = await fetch("https://api.elevenlabs.io/v1/voices", {
-    headers: { "xi-api-key": apiKey },
-  });
-
-  if (!res.ok) {
-    return NextResponse.json(
-      { error: "Failed to fetch voices from ElevenLabs" },
-      { status: 502 }
-    );
-  }
-
-  const data = await res.json();
-  return NextResponse.json(data);
 }

@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { isAdminEmail } from "@/lib/auth/admin";
+import { canAccessAdminArea } from "@/lib/auth/team-managers";
 import { AdminShell } from "@/components/layout/admin-shell";
 
 export default async function AdminLayout({
@@ -17,7 +17,7 @@ export default async function AdminLayout({
     redirect("/login");
   }
 
-  if (!isAdminEmail(user.email)) {
+  if (!(await canAccessAdminArea(user.email, user.id))) {
     redirect("/dashboard");
   }
 

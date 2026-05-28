@@ -1,63 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-
-interface Voice {
-  voice_id: string;
-  name: string;
-  labels?: Record<string, string>;
-}
+import { useState } from "react";
+import { VoiceBrowser } from "@/components/voice-browser";
 
 export function VoicesClient() {
-  const [voices, setVoices] = useState<Voice[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch("/api/voices")
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.error) setError(d.error);
-        else setVoices(d.voices ?? []);
-        setLoading(false);
-      });
-  }, []);
-
-  if (loading) return <p className="text-slate">Loading voices…</p>;
-  if (error) return <p className="text-danger">{error}</p>;
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Name</TableHead>
-          <TableHead>Gender</TableHead>
-          <TableHead>Accent</TableHead>
-          <TableHead>Age</TableHead>
-          <TableHead>ID</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {voices.map((v) => (
-          <TableRow key={v.voice_id}>
-            <TableCell className="font-medium">{v.name}</TableCell>
-            <TableCell>{v.labels?.gender ?? "—"}</TableCell>
-            <TableCell>{v.labels?.accent ?? "—"}</TableCell>
-            <TableCell>{v.labels?.age ?? "—"}</TableCell>
-            <TableCell className="font-mono text-body-sm text-slate">
-              {v.voice_id.slice(0, 8)}…
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <div className="max-w-3xl">
+      <p className="text-body-sm text-slate mb-4">
+        Search voices in your ElevenLabs account or browse the public library to
+        import new ones. Imported voices appear under My voices and can be
+        assigned to characters.
+      </p>
+      <VoiceBrowser
+        selectedId={selectedId}
+        onSelect={setSelectedId}
+        genderDefault="all"
+      />
+    </div>
   );
 }

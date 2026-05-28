@@ -1,6 +1,17 @@
 import { createClient } from "@/lib/supabase/server";
+import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
 import { BookDetailClient } from "./book-detail-client";
 import { notFound } from "next/navigation";
+import type { TaggedLine } from "@/lib/types/database";
+
+export const dynamic = "force-dynamic";
+
+function embedCharacter(
+  raw: { canonical_name?: string } | { canonical_name?: string }[] | null
+): { canonical_name?: string } | null {
+  if (!raw) return null;
+  return Array.isArray(raw) ? raw[0] ?? null : raw;
+}
 
 export default async function BookDetailPage({
   params,
@@ -10,41 +21,50 @@ export default async function BookDetailPage({
   const { id } = await params;
   const supabase = await createClient();
 
-  const { data: book } = await supabase
+  const { data: book, error: bookError } = await supabase
     .from("books")
     .select("*, series(id, name, pen_name_id, pen_names(name))")
     .eq("id", id)
-    .single();
+    .maybeSingle();
+
+  if (bookError) {
+    console.error("Book detail load failed:", bookError.message, { id });
+    throw new Error(bookError.message);
+  }
 
   if (!book) notFound();
 
-  const { data: roster } = await supabase
-    .from("characters")
-    .select("*")
-    .eq("series_id", book.series_id);
+  const [{ data: roster }, { data: bookChars }] = await Promise.all([
+    supabase.from("characters").select("*").eq("series_id", book.series_id),
+    supabase
+      .from("book_characters")
+      .select("*, characters(canonical_name)")
+      .eq("book_id", id),
+  ]);
 
-  const { data: bookChars } = await supabase
-    .from("book_characters")
-    .select("*, characters(*)")
-    .eq("book_id", id);
+  let lines: TaggedLine[] = [];
+  try {
+    lines = await fetchAllTaggedLines(supabase, id, "*");
+  } catch (e) {
+    console.error("Failed to load tagged lines:", e);
+  }
 
-  const { data: lines } = await supabase
-    .from("tagged_lines")
-    .select("*")
-    .eq("book_id", id)
-    .order("line_order");
-
-  const flaggedCount = (lines ?? []).filter((l) => l.flag_reason).length;
+  const flaggedCount = lines.filter((l) => l.flag_reason).length;
 
   const detectedMap = new Map<string, { count: number; samples: string[] }>();
 
   for (const bc of bookChars ?? []) {
-    const char = bc.characters as { canonical_name?: string } | null;
+    const char = embedCharacter(
+      bc.characters as
+        | { canonical_name?: string }
+        | { canonical_name?: string }[]
+        | null
+    );
     const name = char?.canonical_name ?? "Unknown";
     detectedMap.set(name, { count: bc.line_count, samples: [] });
   }
 
-  for (const line of lines ?? []) {
+  for (const line of lines) {
     if (line.speaker_label === "Narrator") continue;
     const entry = detectedMap.get(line.speaker_label) ?? {
       count: 0,
@@ -72,6 +92,7 @@ export default async function BookDetailPage({
         matched_character_id: character?.id ?? null,
         matched_character_name: character?.canonical_name ?? null,
         suggested_alias_of: suggestedAliasOf,
+        voice_name: character?.elevenlabs_voice_name ?? null,
       };
     }
   );

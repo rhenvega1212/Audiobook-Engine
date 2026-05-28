@@ -1,12 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -16,14 +24,28 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { VoicePickerDialog } from "@/components/voice-picker-dialog";
-import type { Character } from "@/lib/types/database";
+import { voiceAssignmentsFromCharacters } from "@/lib/elevenlabs/voice-picker-utils";
+import type { Character, CharacterRole } from "@/lib/types/database";
+import {
+  ROLE_LABELS,
+  type LibraryCharacter,
+} from "@/lib/characters/character-library";
 
 export function CharacterDetailClient({
   character,
+  library,
+  sampleLines,
+  seriesCharacters,
   history,
   appearances,
 }: {
   character: Character;
+  library: LibraryCharacter;
+  sampleLines: string[];
+  seriesCharacters: Pick<
+    Character,
+    "id" | "canonical_name" | "elevenlabs_voice_id"
+  >[];
   history: {
     changed_at: string;
     old_voice_name: string | null;
@@ -32,30 +54,114 @@ export function CharacterDetailClient({
   appearances: { title: string; line_count: number }[];
 }) {
   const router = useRouter();
+  const seriesVoiceAssignments = useMemo(
+    () => voiceAssignmentsFromCharacters(seriesCharacters),
+    [seriesCharacters]
+  );
   const [pickerOpen, setPickerOpen] = useState(false);
   const [style, setStyle] = useState(character.voice_style ?? "");
+  const [gender, setGender] = useState(character.gender);
+  const [role, setRole] = useState<CharacterRole>(character.role ?? "guest");
 
-  async function saveStyle() {
+  async function patchCharacter(body: Record<string, unknown>) {
     const res = await fetch(`/api/characters/${character.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ voice_style: style }),
+      body: JSON.stringify(body),
     });
-    if (!res.ok) toast.error("Save failed");
-    else {
-      toast.success("Style updated");
-      router.refresh();
+    if (!res.ok) {
+      toast.error("Save failed");
+      return false;
     }
+    toast.success("Saved");
+    router.refresh();
+    return true;
+  }
+
+  async function saveStyle() {
+    await patchCharacter({ voice_style: style });
+  }
+
+  async function saveProfile() {
+    await patchCharacter({ gender, role });
   }
 
   return (
     <div className="mt-6 space-y-8">
-      <div>
-        <h1 className="font-serif text-h1">{character.canonical_name}</h1>
-        <p className="text-slate mt-1">
-          {(character.series as { name?: string })?.name}
-        </p>
+      <div className="flex flex-wrap items-start gap-3">
+        <div>
+          <h1 className="font-serif text-h1">{character.canonical_name}</h1>
+          <p className="text-slate mt-1">
+            {(character.series as { name?: string })?.name}
+          </p>
+        </div>
+        <Badge variant="main">{library.tier_label}</Badge>
+        <Badge variant={library.cast_status === "cast" ? "cast" : "needsVoice"}>
+          {library.cast_status === "cast" ? "Cast" : "Needs voice"}
+        </Badge>
+        {library.total_lines > 0 && (
+          <span className="text-body-sm text-slate">
+            {library.total_lines.toLocaleString()} lines across{" "}
+            {library.book_count} book{library.book_count === 1 ? "" : "s"}
+          </span>
+        )}
       </div>
+
+      <Card className="max-w-lg">
+        <CardHeader>
+          <CardTitle>Profile</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <Label>Tier (role)</Label>
+              <Select
+                value={role}
+                onValueChange={(v) => setRole(v as CharacterRole)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(ROLE_LABELS) as CharacterRole[]).map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {ROLE_LABELS[r]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="mt-1 text-body-sm text-slate">
+                Auto-tier uses line counts unless you pick a role other than
+                Guest.
+              </p>
+            </div>
+            <div>
+              <Label>Gender</Label>
+              <Select
+                value={gender}
+                onValueChange={(v) =>
+                  setGender(v as Character["gender"])
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="female">Female</SelectItem>
+                  <SelectItem value="male">Male</SelectItem>
+                  <SelectItem value="unknown">Unknown</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          {(character.aliases?.length ?? 0) > 0 && (
+            <p className="text-body-sm text-slate">
+              Aliases: {character.aliases.join(", ")}
+            </p>
+          )}
+          <Button onClick={saveProfile}>Save profile</Button>
+        </CardContent>
+      </Card>
 
       <Card className="max-w-lg">
         <CardHeader>
@@ -123,10 +229,11 @@ export function CharacterDetailClient({
 
       <VoicePickerDialog
         character={character}
-        sampleLines={[]}
+        sampleLines={sampleLines}
         open={pickerOpen}
         onOpenChange={setPickerOpen}
         onSaved={() => router.refresh()}
+        assignedVoices={seriesVoiceAssignments}
       />
     </div>
   );

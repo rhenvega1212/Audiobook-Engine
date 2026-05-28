@@ -15,6 +15,6 @@ export function isAdminEmail(email: string | undefined | null): boolean {
   return admins.includes(email.trim().toLowerCase());
 }
 
-export function getHomePathForEmail(email: string | undefined | null): string {
-  return isAdminEmail(email) ? "/admin/users" : "/dashboard";
+export function getHomePathForEmail(_email: string | undefined | null): string {
+  return "/dashboard";
 }
