@@ -15,8 +15,9 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
 import type { PenName, Series } from "@/lib/types/database";
+import { runBatchAiReview } from "@/lib/books/run-ai-review-client";
 
-type UploadPhase = "idle" | "uploading" | "analyzing" | "done";
+type UploadPhase = "idle" | "uploading" | "analyzing" | "ai_review" | "done";
 
 export function NewBookForm({
   penNames,
@@ -36,11 +37,28 @@ export function NewBookForm({
     ? allSeries.filter((s) => s.pen_name_id === penNameId)
     : allSeries;
 
-  const loading = phase === "uploading" || phase === "analyzing";
+  const loading =
+    phase === "uploading" || phase === "analyzing" || phase === "ai_review";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!file || !seriesId || !title) return;
+
+    const readinessRes = await fetch(
+      `/api/series/${seriesId}/analyze-readiness`
+    );
+    const readiness = await readinessRes.json().catch(() => ({}));
+    if (!readinessRes.ok || !(readiness as { ready?: boolean }).ready) {
+      const issues = (readiness as { issues?: { canonical_name: string }[] })
+        .issues;
+      const names = issues?.map((i) => i.canonical_name).join(", ") ?? "";
+      toast.error(
+        names
+          ? `Add aliases for: ${names} (Character Library) before analyzing`
+          : "Series cast is not ready — add aliases for series regulars"
+      );
+      return;
+    }
 
     setPhase("uploading");
     const formData = new FormData();
@@ -95,24 +113,28 @@ export function NewBookForm({
       const summary = analyzeData as {
         total_lines?: number;
         flagged_count?: number;
-        status?: string;
-        ai_review?: {
-          lines_updated?: number;
-          lines_cleared?: number;
-        } | null;
       };
-      const ai = summary.ai_review;
-      const aiPart =
-        ai?.lines_cleared != null
-          ? ` — AI cleared ${ai.lines_cleared} flagged lines`
-          : ai?.lines_updated
-            ? ` — AI reviewed ${ai.lines_updated} lines`
-            : "";
+
+      setPhase("ai_review");
+      let aiCleared = 0;
+      try {
+        const aiResult = await runBatchAiReview(
+          bookId,
+          () => {},
+          summary.flagged_count
+        );
+        aiCleared = aiResult.lines_cleared ?? 0;
+      } catch {
+        toast.message(
+          "Rules analysis done — AI review skipped or failed. You can run it from Review."
+        );
+      }
+
       toast.success(
-        `Analysis complete — ${summary.total_lines ?? "?"} lines, ${summary.flagged_count ?? "?"} flagged${aiPart}`
+        `${summary.total_lines ?? "?"} lines — ${summary.flagged_count ?? "?"} flagged for review${aiCleared ? ` (${aiCleared} cleared by AI)` : ""}`
       );
       setPhase("done");
-      router.push(`/books/${bookId}`);
+      router.push(`/books/${bookId}/review`);
       router.refresh();
     } catch {
       toast.error(
@@ -203,8 +225,10 @@ export function NewBookForm({
             {phase === "uploading"
               ? "Uploading manuscript…"
               : phase === "analyzing"
-                ? "Analyzing characters (please wait)…"
-                : "Upload & analyze"}
+                ? "Tagging dialogue (rules)…"
+                : phase === "ai_review"
+                  ? "AI review (batched)…"
+                  : "Upload & analyze"}
           </Button>
         </form>
       </CardContent>

@@ -38,6 +38,15 @@ export async function runBatchAiReview(
 
     const data = await res.json().catch(() => ({}));
 
+    if ((data as { budget_exceeded?: boolean }).budget_exceeded) {
+      const budget = (data as { budget?: { cap: number; spend: number } }).budget;
+      throw new Error(
+        budget
+          ? `AI budget reached ($${budget.spend.toFixed(2)} / $${budget.cap.toFixed(2)}). Increase the book budget on the book page.`
+          : "AI budget reached for this book."
+      );
+    }
+
     if (!res.ok) {
       throw new Error(
         (data as { error?: string }).error ?? `AI review failed (batch ${batch})`

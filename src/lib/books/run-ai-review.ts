@@ -6,6 +6,11 @@ import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
 import { findCharacterBySpeaker } from "@/lib/characters/resolve-character";
 import type { Character } from "@/lib/types/database";
 import { updateBookStatus } from "./compute-book-status";
+import {
+  canRunAiScene,
+  ESTIMATED_USD_PER_AI_SCENE,
+  budgetSummary,
+} from "./ai-budget";
 
 function rosterForBook(
   allChars: Character[],
@@ -40,11 +45,32 @@ export async function runAiReviewForBook(
 ) {
   const { data: book } = await admin
     .from("books")
-    .select("series_id")
+    .select("series_id, ai_budget_usd, ai_spend_usd")
     .eq("id", bookId)
     .single();
 
   if (!book) throw new Error("Book not found");
+
+  const budgetUsd = Number(book.ai_budget_usd ?? 500);
+  const spendUsd = Number(book.ai_spend_usd ?? 0);
+  if (!canRunAiScene(spendUsd, budgetUsd, 1)) {
+    const summary = budgetSummary(spendUsd, budgetUsd);
+    return {
+      scenes_total: 0,
+      scenes_processed: 0,
+      lines_updated: 0,
+      api_calls: 0,
+      lines_cleared: 0,
+      status: await updateBookStatus(admin, bookId),
+      has_more: false,
+      pending_flagged: 0,
+      errors: [
+        `AI budget reached ($${summary.spend.toFixed(2)} / $${summary.cap.toFixed(2)}). Raise the book budget or add Anthropic credits.`,
+      ],
+      budget_exceeded: true,
+      budget: summary,
+    };
+  }
 
   const { data: chars } = await admin
     .from("characters")
@@ -76,6 +102,14 @@ export async function runAiReviewForBook(
     apiKey,
     options
   );
+
+  if (result.api_calls > 0) {
+    const added = result.api_calls * ESTIMATED_USD_PER_AI_SCENE;
+    await admin
+      .from("books")
+      .update({ ai_spend_usd: spendUsd + added })
+      .eq("id", bookId);
+  }
 
   const processedSet = new Set(result.processed_line_indices);
   let linesCleared = 0;

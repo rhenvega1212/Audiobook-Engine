@@ -52,6 +52,8 @@ export type Book = {
   title: string;
   manuscript_path: string | null;
   status: BookStatus;
+  ai_budget_usd?: number;
+  ai_spend_usd?: number;
   uploaded_by: string | null;
   created_at: string;
   updated_at: string;

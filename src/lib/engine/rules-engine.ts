@@ -5,6 +5,8 @@ import {
   ACTION_TAG_VERBS,
   PRONOUN_GENDER,
 } from "./vocabulary";
+import { flagReasonForLine, type FlagContext } from "./flag-policy";
+import { resolveFirstNameToCanonical } from "./resolve-first-name";
 
 function findCharacter(
   name: string,
@@ -42,8 +44,8 @@ function extractSpeakerFromAttribution(
   attributionText: string,
   roster: EngineCharacter[],
   lastNamedSpeakers: Record<string, string>
-): [string | null, TaggedLine["confidence"]] {
-  if (!attributionText.trim()) return [null, "none"];
+): [string | null, TaggedLine["confidence"], boolean] {
+  if (!attributionText.trim()) return [null, "none", false];
 
   const textLower = attributionText.toLowerCase();
   const words = textLower.match(/\b[\w']+\b/g) ?? [];
@@ -55,19 +57,23 @@ function extractSpeakerFromAttribution(
   for (const candidate of nameCandidates) {
     const char = findCharacter(candidate, roster);
     if (char) {
-      return [char.canonical_name, hasVerb ? "high" : "medium"];
+      return [char.canonical_name, hasVerb ? "high" : "medium", false];
+    }
+    const byFirst = resolveFirstNameToCanonical(candidate, roster);
+    if (byFirst) {
+      return [byFirst.canonical_name, hasVerb ? "medium" : "medium", true];
     }
   }
 
   for (const [pronoun, gender] of Object.entries(PRONOUN_GENDER)) {
     if (new RegExp(`\\b${pronoun}\\b`).test(textLower) && hasVerb) {
       const last = lastNamedSpeakers[gender];
-      if (last) return [last, "low"];
-      return [null, "low"];
+      if (last) return [last, "low", false];
+      return [null, "low", false];
     }
   }
 
-  return [null, "none"];
+  return [null, "none", false];
 }
 
 function emitNarration(
@@ -110,7 +116,7 @@ function splitParagraphIntoLines(
     const postText = paragraph.slice(match.index! + match[0].length, nextStart).trim();
 
     const attributionContext = (preText + " " + postText).trim();
-    let [speaker, confidence] = extractSpeakerFromAttribution(
+    let [speaker, confidence, firstNameOnlyMatch] = extractSpeakerFromAttribution(
       attributionContext,
       roster,
       lastNamedSpeakers
@@ -121,28 +127,42 @@ function splitParagraphIntoLines(
     }
 
     const dialogueText = cleanDialogueLine(match[1]);
-    let flag: string | null = null;
+    let inferenceKind: FlagContext["inferenceKind"] = "none";
 
     if (speaker === null) {
+      firstNameOnlyMatch = false;
       if (conversationParticipants.length === 2) {
         const lastSpeaker =
           conversationParticipants[conversationParticipants.length - 1];
         speaker =
           conversationParticipants.find((p) => p !== lastSpeaker) ?? lastSpeaker;
         confidence = "low";
-        flag = "unattributed_back_and_forth_inferred";
+        inferenceKind = "back_and_forth";
       } else if (conversationParticipants.length > 0) {
         speaker = conversationParticipants[conversationParticipants.length - 1];
         confidence = "low";
-        flag = "unattributed_dialogue_inferred_from_context";
+        inferenceKind = "last_speaker";
       } else {
         speaker = "UNKNOWN";
         confidence = "none";
-        flag = "unattributed_dialogue_no_context";
+        inferenceKind = "no_context";
       }
     } else if (confidence === "low") {
-      flag = "pronoun_only_attribution";
+      inferenceKind = "pronoun";
     }
+
+    const rosterResolved =
+      speaker === "Narrator" ||
+      speaker === "UNKNOWN" ||
+      !!findCharacter(speaker, roster);
+
+    const flag = flagReasonForLine({
+      speaker,
+      confidence,
+      rosterResolved,
+      firstNameOnlyMatch,
+      inferenceKind,
+    });
 
     results.push({
       speaker,

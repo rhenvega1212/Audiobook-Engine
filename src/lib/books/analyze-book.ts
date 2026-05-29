@@ -108,6 +108,16 @@ async function runAnalysis(
       }
     }
 
+    let flagReason = line.flag_reason;
+    if (
+      line.speaker !== "Narrator" &&
+      line.speaker !== "UNKNOWN" &&
+      !speakerCharId &&
+      !flagReason
+    ) {
+      flagReason = "speaker_not_in_roster";
+    }
+
     return {
       book_id: bookId,
       line_order: idx,
@@ -116,7 +126,7 @@ async function runAnalysis(
       speaker_label: speakerLabel,
       line_text: line.line,
       confidence: line.confidence,
-      flag_reason: line.flag_reason,
+      flag_reason: flagReason,
       ai_reviewed: false,
       human_reviewed: false,
     };

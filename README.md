@@ -33,8 +33,19 @@ npx tsx scripts/cleanup-junk-characters.ts
 ## Deploy (Vercel)
 
 1. Import repo to Vercel.
-2. Set environment variables: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ELEVENLABS_API_KEY`, `ANTHROPIC_API_KEY`.
-3. Add production URL to Supabase Auth redirect URLs.
+2. Set environment variables: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ELEVENLABS_API_KEY`, **`ANTHROPIC_API_KEY`** (required for AI attribution; not read from `.env.local` on deploy).
+3. Optional: `ANTHROPIC_MODEL=claude-sonnet-4-6`
+4. Add production URL to Supabase Auth redirect URLs.
+5. Run migration `supabase/migrations/20250529000001_book_ai_budget.sql` in Supabase SQL Editor.
+
+**Anthropic credits:** reload at [console.anthropic.com](https://console.anthropic.com) → Billing. Per-book spend is estimated in the app (default $500 cap, editable on each book).
+
+**Re-analyze existing books** (rebuilds tagged lines):
+
+```bash
+npx tsx scripts/reanalyze-all-books.ts --dry-run
+npx tsx scripts/reanalyze-all-books.ts
+```
 
 ## Docs
 

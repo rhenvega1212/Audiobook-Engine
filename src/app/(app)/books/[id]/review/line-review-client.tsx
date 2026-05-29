@@ -21,6 +21,7 @@ import { useLineAudioPlayer } from "@/components/audio/line-player";
 import { PerformLineRecorder } from "@/components/audio/perform-line-recorder";
 import { resolveSpokenLine, type PronunciationEntry } from "@/lib/pronunciation/apply";
 import { runBatchAiReview } from "@/lib/books/run-ai-review-client";
+import { AcceptAiPreviewDialog } from "@/components/books/accept-ai-preview-dialog";
 
 export function LineReviewClient({
   bookId,
@@ -62,7 +63,7 @@ export function LineReviewClient({
   const [aiLoading, setAiLoading] = useState(false);
   const [aiReviewProgress, setAiReviewProgress] = useState(0);
   const [aiReviewMessage, setAiReviewMessage] = useState("");
-  const [acceptingAi, setAcceptingAi] = useState(false);
+  const [acceptAiOpen, setAcceptAiOpen] = useState(false);
 
   const current = queue[0];
   const total = flaggedLines.length;
@@ -179,18 +180,8 @@ export function LineReviewClient({
     }
   }
 
-  async function acceptAiConfirmed() {
-    setAcceptingAi(true);
-    const res = await fetch(`/api/books/${bookId}/lines/accept-ai`, {
-      method: "POST",
-    });
-    setAcceptingAi(false);
-    if (!res.ok) {
-      toast.error("Could not accept AI-confirmed lines");
-      return;
-    }
-    const data = await res.json();
-    toast.success(`Accepted ${data.accepted} AI-confirmed lines`);
+  function onAcceptAiDone(count: number) {
+    toast.success(`Accepted ${count} AI-confirmed line${count === 1 ? "" : "s"}`);
     router.refresh();
   }
 
@@ -429,11 +420,16 @@ export function LineReviewClient({
         <Button
           variant="secondary"
           className="w-full"
-          onClick={acceptAiConfirmed}
-          disabled={acceptingAi}
+          onClick={() => setAcceptAiOpen(true)}
         >
-          Accept all AI-confirmed flagged lines
+          Preview & accept AI suggestions…
         </Button>
+        <AcceptAiPreviewDialog
+          bookId={bookId}
+          open={acceptAiOpen}
+          onOpenChange={setAcceptAiOpen}
+          onAccepted={onAcceptAiDone}
+        />
         <Button
           variant="outline"
           className="w-full"
