@@ -22,7 +22,10 @@ type LineSlice = {
 };
 
 /** One block per source paragraph — text is all lines joined for that paragraph. */
-export function buildDocumentBlocks(lines: LineSlice[]): DocumentBlock[] {
+export function buildDocumentBlocks(
+  lines: LineSlice[],
+  sourceParagraphs?: string[]
+): DocumentBlock[] {
   if (lines.length === 0) return [];
 
   const sorted = [...lines].sort((a, b) => a.line_order - b.line_order);
@@ -38,16 +41,19 @@ export function buildDocumentBlocks(lines: LineSlice[]): DocumentBlock[] {
 
   return paraNums.map((paraNum) => {
     const group = byPara.get(paraNum)!;
-    const text = group
-      .map((l) => {
-        const trimmed = l.line_text.trim();
-        if (!trimmed) return "";
-        return l.speaker_label
-          ? formatLineForManuscript(trimmed, l.speaker_label)
-          : trimmed;
-      })
-      .filter(Boolean)
-      .join(" ");
+    const sourceText = sourceParagraphs?.[paraNum]?.trim();
+    const text =
+      sourceText ??
+      group
+        .map((l) => {
+          const trimmed = l.line_text.trim();
+          if (!trimmed) return "";
+          return l.speaker_label
+            ? formatLineForManuscript(trimmed, l.speaker_label)
+            : trimmed;
+        })
+        .filter(Boolean)
+        .join(" ");
     const excluded = group.every((l) => l.excluded_from_export);
 
     return {
@@ -62,8 +68,11 @@ export function buildDocumentBlocks(lines: LineSlice[]): DocumentBlock[] {
 }
 
 /** Paragraph strings in order — for re-tagging after cleanup. */
-export function paragraphsFromLines(lines: LineSlice[]): string[] {
-  return buildDocumentBlocks(lines)
+export function paragraphsFromLines(
+  lines: LineSlice[],
+  sourceParagraphs?: string[]
+): string[] {
+  return buildDocumentBlocks(lines, sourceParagraphs)
     .map((b) => b.text.trim())
     .filter(Boolean);
 }

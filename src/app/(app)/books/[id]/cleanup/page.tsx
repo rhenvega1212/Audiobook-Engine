@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
 import { resyncBookChapterPositions } from "@/lib/books/book-chapters";
+import { fetchSourceParagraphs } from "@/lib/books/manuscript-source";
 import { notFound } from "next/navigation";
 import { displayBookTitle } from "@/lib/books/display-title";
 import { CleanupClient } from "./cleanup-client";
@@ -85,12 +86,21 @@ export default async function CleanupPage({
     voice_name: null,
   }));
 
+  let sourceParagraphs: string[] | undefined;
+  try {
+    const admin = createAdminClient();
+    sourceParagraphs = (await fetchSourceParagraphs(admin, id)) ?? undefined;
+  } catch (e) {
+    console.warn("Source paragraph load skipped:", e);
+  }
+
   return (
     <CleanupClient
       bookId={id}
       bookTitle={displayBookTitle(book.title)}
       initialLines={lines}
       initialBookChapters={bookChapters}
+      sourceParagraphs={sourceParagraphs}
     />
   );
 }

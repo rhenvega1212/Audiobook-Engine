@@ -118,11 +118,12 @@ export function stripOuterQuotes(text: string): string {
   return inner || text;
 }
 
-/** Wrap spoken dialogue in quotes when missing (document view / paragraph rebuild). */
-export function wrapInQuotes(text: string, opener: QuoteChar = '"'): string {
+/** Wrap spoken dialogue in quotes when missing (fallback when source docx unavailable). */
+export function wrapInQuotes(text: string, opener: QuoteChar = "\u201C"): string {
   const t = text.trim();
   if (!t || isWrappedInQuotes(t)) return t;
-  const closer = CLOSERS.get(opener) ?? opener;
+  const closer =
+    opener === "\u201C" ? "\u201D" : (CLOSERS.get(opener) ?? opener);
   return `${opener}${t}${closer}`;
 }
 
@@ -130,9 +131,7 @@ export function formatLineForManuscript(
   text: string,
   speakerLabel: string
 ): string {
-  const isDialogue =
-    speakerLabel !== "Narrator" && speakerLabel !== "UNKNOWN";
-  if (!isDialogue) return text.trim();
+  if (speakerLabel === "Narrator") return text.trim();
   return wrapInQuotes(text);
 }
 

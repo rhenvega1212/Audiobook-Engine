@@ -42,11 +42,13 @@ export function CleanupClient({
   bookTitle,
   initialLines,
   initialBookChapters = [],
+  sourceParagraphs,
 }: {
   bookId: string;
   bookTitle: string;
   initialLines: ManuscriptLine[];
   initialBookChapters?: BookChapterRow[];
+  sourceParagraphs?: string[];
 }) {
   const router = useRouter();
   const [lines, setLines] = useState(initialLines);
@@ -72,7 +74,10 @@ export function CleanupClient({
     setBookChapters(initialBookChapters);
   }, [initialBookChapters]);
 
-  const blocks = useMemo(() => buildDocumentBlocks(lines), [lines]);
+  const blocks = useMemo(
+    () => buildDocumentBlocks(lines, sourceParagraphs),
+    [lines, sourceParagraphs]
+  );
 
   const chapters = useMemo(() => {
     if (bookChapters.length > 0) {
