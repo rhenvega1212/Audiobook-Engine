@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { CANONICAL_CAST_NAMES } from "@/lib/engine/unknown-speaker";
 import { createEngineCharacter } from "@/lib/engine/types";
-import { runAiAssistedPass } from "@/lib/engine/ai-attribution";
+import { runAiAssistedPass, lineNeedsAiPass } from "@/lib/engine/ai-attribution";
 import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
 import { findCharacterBySpeaker } from "@/lib/characters/resolve-character";
 import type { Character } from "@/lib/types/database";
@@ -50,6 +50,8 @@ export type RunAiReviewOptions = {
   scope?: AiReviewScope;
   chapters?: BookChapterRow[];
   previewOnly?: boolean;
+  /** Line indices already handled in a multi-request preview run. */
+  processedIndices?: number[];
 };
 
 async function loadAiReviewContext(admin: SupabaseClient, bookId: string) {
@@ -125,14 +127,7 @@ export async function previewAiReviewForBook(
   const scope = options?.scope ?? { type: "flagged" as const };
   const chapters = options?.chapters ?? [];
   const eligible = eligibleLineIndices(ctx.dbLines, scope, chapters);
-  const previewProcessed = new Set<number>();
-  const allProposals: AiReviewProposal[] = [];
-  const allErrors: string[] = [];
-  let totalApiCalls = 0;
-  let scenesProcessed = 0;
-  let scenesTotal = 0;
-  let hasMore = true;
-  let spendAfter = ctx.spendUsd;
+  const previewProcessed = new Set(options?.processedIndices ?? []);
 
   const engineLines = buildEngineLines(ctx.dbLines);
   const passOptions = {
@@ -147,52 +142,39 @@ export async function previewAiReviewForBook(
     maxScenes: options?.maxScenes ?? 12,
   };
 
-  while (hasMore && totalApiCalls < 40) {
-    if (!canRunAiScene(spendAfter, ctx.budgetUsd, 1)) {
-      allErrors.push("AI budget reached before preview completed.");
-      break;
-    }
+  const result = await runAiAssistedPass(
+    engineLines,
+    ctx.roster,
+    apiKey,
+    passOptions
+  );
 
-    const result = await runAiAssistedPass(
-      engineLines,
-      ctx.roster,
-      apiKey,
-      passOptions
-    );
-
-    scenesTotal = result.scenes_total;
-    scenesProcessed += result.scenes_processed;
-    totalApiCalls += result.api_calls;
-    spendAfter += result.api_calls * ESTIMATED_USD_PER_AI_SCENE;
-    allErrors.push(...result.errors);
-
-    for (const p of result.proposals) {
-      if (!allProposals.some((x) => x.line_id === p.line_id)) {
-        allProposals.push(p);
-      }
-    }
-    for (const idx of result.processed_line_indices) {
-      previewProcessed.add(idx);
-    }
-
-    hasMore = result.has_more;
-    if (result.scenes_processed === 0) break;
+  for (const idx of result.processed_line_indices) {
+    previewProcessed.add(idx);
   }
 
-  if (totalApiCalls > 0) {
+  const hasMore = engineLines.some((l, i) =>
+    lineNeedsAiPass(l, i, { ...passOptions, previewProcessed })
+  );
+
+  if (result.api_calls > 0) {
     await admin
       .from("books")
-      .update({ ai_spend_usd: spendAfter })
+      .update({
+        ai_spend_usd:
+          ctx.spendUsd + result.api_calls * ESTIMATED_USD_PER_AI_SCENE,
+      })
       .eq("id", bookId);
   }
 
   return {
-    proposals: allProposals,
-    scenes_total: scenesTotal,
-    scenes_processed: scenesProcessed,
-    api_calls: totalApiCalls,
-    has_more: false,
-    errors: allErrors,
+    proposals: result.proposals,
+    scenes_total: result.scenes_total,
+    scenes_processed: result.scenes_processed,
+    api_calls: result.api_calls,
+    has_more: hasMore,
+    processed_indices: [...previewProcessed],
+    errors: result.errors,
     used_source_paragraphs: !!ctx.sourceParagraphs?.length,
   };
 }

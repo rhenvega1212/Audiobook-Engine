@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import {
   Dialog,
   DialogContent,
@@ -18,6 +19,8 @@ export function AiReviewPreviewDialog({
   open,
   proposals,
   loading,
+  progress = 0,
+  progressMessage,
   onOpenChange,
   onApplied,
 }: {
@@ -25,6 +28,8 @@ export function AiReviewPreviewDialog({
   open: boolean;
   proposals: AiReviewProposal[];
   loading?: boolean;
+  progress?: number;
+  progressMessage?: string;
   onOpenChange: (open: boolean) => void;
   onApplied: (applied: number) => void;
 }) {
@@ -92,12 +97,25 @@ export function AiReviewPreviewDialog({
           </DialogTitle>
           <DialogDescription>
             {loading
-              ? "Reading scenes from your Word file. This may take a minute."
+              ? progressMessage ||
+                "Reading scenes from your Word file. This may take a minute."
               : changed.length > 0
                 ? `${changed.length} speaker change${changed.length === 1 ? "" : "s"}. Uncheck any you disagree with before applying.`
                 : "No speaker changes — Claude confirmed current assignments."}
           </DialogDescription>
         </DialogHeader>
+
+        {loading && (
+          <div className="space-y-2 rounded-md border border-burgundy/20 bg-burgundy/5 px-4 py-3">
+            <div className="flex items-center justify-between gap-2 text-body-sm">
+              <span className="text-burgundy font-medium truncate">
+                {progressMessage || "Gathering proposals…"}
+              </span>
+              <span className="text-slate tabular-nums shrink-0">{progress}%</span>
+            </div>
+            <Progress value={progress} className="h-2" />
+          </div>
+        )}
 
         <div className="flex items-center justify-between gap-2 text-body-sm">
           <span className="text-slate">
@@ -136,7 +154,7 @@ export function AiReviewPreviewDialog({
           {!loading && proposals.length === 0 && (
             <p className="p-6 text-body-sm text-slate">
               No lines matched your scope and filters. Try a different chapter or
-              enable re-check of AI-reviewed lines.
+              enable re-check of uncertain AI-reviewed lines.
             </p>
           )}
           {!loading &&

@@ -16,7 +16,7 @@ export type AiReviewPreviewOptions = {
   includeAiReviewed?: boolean;
 };
 
-/** Run Claude in preview mode (no DB writes) for the full scope in one request. */
+/** Run Claude in preview mode (no DB writes), batched for progress updates. */
 export async function runBatchAiReviewPreview(
   bookId: string,
   onProgress?: (update: BatchAiReviewProgress) => void,
@@ -26,66 +26,113 @@ export async function runBatchAiReviewPreview(
   errors: string[];
   api_calls: number;
 }> {
+  let hasMore = true;
+  let batch = 0;
+  let processedIndices: number[] = [];
+  const allProposals: AiReviewProposal[] = [];
+  const allErrors: string[] = [];
+  let apiCalls = 0;
+
   onProgress?.({
     message: "Connecting to Claude…",
-    progress: 5,
-    batch: 1,
+    progress: 3,
+    batch: 0,
     pending: 0,
   });
 
-  onProgress?.({
-    message: "Reading scenes from your Word file…",
-    progress: 15,
-    batch: 1,
-    pending: 0,
-  });
+  while (hasMore && batch < 40) {
+    batch++;
+    onProgress?.({
+      message: `Reading scenes from your Word file (batch ${batch})…`,
+      progress: hasMore ? Math.min(92, 8 + batch * 7) : 100,
+      batch,
+      pending: allProposals.length,
+    });
 
-  const res = await fetch(`/api/books/${bookId}/ai-review/preview`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      include_ai_reviewed: options?.includeAiReviewed === true,
-      scope:
-        options?.scope?.type === "chapter"
-          ? { type: "chapter", chapter_id: options.scope.chapterId }
-          : { type: "flagged" },
-      chapters: options?.chapters,
-    }),
-  });
+    const res = await fetch(`/api/books/${bookId}/ai-review/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        max_scenes: 12,
+        include_ai_reviewed: options?.includeAiReviewed === true,
+        processed_indices: processedIndices,
+        scope:
+          options?.scope?.type === "chapter"
+            ? { type: "chapter", chapter_id: options.scope.chapterId }
+            : { type: "flagged" },
+        chapters: options?.chapters,
+      }),
+    });
 
-  const data = await res.json().catch(() => ({}));
+    const data = await res.json().catch(() => ({}));
 
-  if ((data as { budget_exceeded?: boolean }).budget_exceeded) {
-    const budget = (data as { budget?: { cap: number; spend: number } }).budget;
-    throw new Error(
-      budget
-        ? `AI budget reached ($${budget.spend.toFixed(2)} / $${budget.cap.toFixed(2)}).`
-        : "AI budget reached for this book."
-    );
+    if ((data as { budget_exceeded?: boolean }).budget_exceeded) {
+      const budget = (data as { budget?: { cap: number; spend: number } }).budget;
+      throw new Error(
+        budget
+          ? `AI budget reached ($${budget.spend.toFixed(2)} / $${budget.cap.toFixed(2)}).`
+          : "AI budget reached for this book."
+      );
+    }
+
+    if (!res.ok) {
+      throw new Error(
+        (data as { error?: string }).error ?? `AI preview failed (batch ${batch})`
+      );
+    }
+
+    const batchProposals =
+      (data as { proposals?: AiReviewProposal[] }).proposals ?? [];
+    for (const p of batchProposals) {
+      if (!allProposals.some((x) => x.line_id === p.line_id)) {
+        allProposals.push(p);
+      }
+    }
+
+    apiCalls += (data as { api_calls?: number }).api_calls ?? 0;
+    hasMore = (data as { has_more?: boolean }).has_more ?? false;
+    processedIndices =
+      (data as { processed_indices?: number[] }).processed_indices ??
+      processedIndices;
+
+    const scenes = (data as { scenes_processed?: number }).scenes_processed ?? 0;
+    const errs = (data as { errors?: string[] }).errors ?? [];
+    allErrors.push(...errs);
+
+    if (hasMore && scenes === 0) {
+      if (errs.length > 0) {
+        throw new Error(errs[0] ?? "AI preview stalled");
+      }
+      hasMore = false;
+    }
+
+    const progress = hasMore
+      ? Math.min(95, 10 + batch * 8)
+      : 100;
+
+    onProgress?.({
+      message: hasMore
+        ? `Batch ${batch}: ${allProposals.length.toLocaleString()} suggestion${allProposals.length === 1 ? "" : "s"} so far…`
+        : allProposals.length > 0
+          ? `${allProposals.length.toLocaleString()} suggestions ready`
+          : "No changes suggested",
+      progress,
+      batch,
+      pending: allProposals.length,
+    });
   }
-
-  if (!res.ok) {
-    throw new Error(
-      (data as { error?: string }).error ?? "AI preview failed"
-    );
-  }
-
-  const proposals =
-    (data as { proposals?: AiReviewProposal[] }).proposals ?? [];
-  const apiCalls = (data as { api_calls?: number }).api_calls ?? 0;
-  const errors = (data as { errors?: string[] }).errors ?? [];
 
   onProgress?.({
     message:
-      proposals.length > 0
-        ? `${proposals.length.toLocaleString()} suggestions ready`
+      allProposals.length > 0
+        ? `${allProposals.length.toLocaleString()} suggestions ready`
         : "No changes suggested",
     progress: 100,
-    batch: 1,
-    pending: proposals.length,
+    batch,
+    pending: allProposals.length,
   });
 
-  return { proposals, errors, api_calls: apiCalls };
+  return { proposals: allProposals, errors: allErrors, api_calls: apiCalls };
 }
 
 export async function runBatchAiReview(

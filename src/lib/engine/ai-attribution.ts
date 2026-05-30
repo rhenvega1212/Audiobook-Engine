@@ -13,6 +13,33 @@ export type AiPassOptions = {
   previewProcessed?: Set<number>;
 };
 
+/** High-confidence AI pass with flag cleared — keep on re-runs. */
+export function isSettledAiAssignment(line: TaggedLineForAi): boolean {
+  return (
+    !!line.ai_reviewed &&
+    !line.flag_reason &&
+    line.confidence === "high" &&
+    !line.human_reviewed
+  );
+}
+
+/** Reject speaker flips that undo a good prior assignment (defense in depth). */
+export function shouldProposeSpeakerChange(
+  line: TaggedLineForAi,
+  oldSpeaker: string,
+  newSpeaker: string
+): boolean {
+  if (oldSpeaker === newSpeaker) return true;
+  if (newSpeaker !== "Narrator" || oldSpeaker === "Narrator" || oldSpeaker === "UNKNOWN") {
+    return true;
+  }
+  if (isSettledAiAssignment(line)) return false;
+  if (line.confidence === "high" && !line.flag_reason) return false;
+  const text = line.line.trim();
+  if (/["'\u201C\u201D\u2018\u2019]/.test(text)) return false;
+  return true;
+}
+
 /** True when this line still needs a Claude attribution pass. */
 export function lineNeedsAiPass(
   line: TaggedLineForAi,
@@ -24,7 +51,14 @@ export function lineNeedsAiPass(
   if (options?.eligibleIndices && !options.eligibleIndices.has(globalIndex)) {
     return false;
   }
-  if (options?.includeAiReviewed && line.ai_reviewed) return true;
+  if (isSettledAiAssignment(line)) return false;
+  if (options?.includeAiReviewed && line.ai_reviewed) {
+    return (
+      !!line.flag_reason ||
+      line.speaker === "UNKNOWN" ||
+      line.confidence !== "high"
+    );
+  }
   return !!line.flag_reason && !line.ai_reviewed;
 }
 
@@ -130,7 +164,12 @@ ${parts.join("\n\n")}
   let sceneText = "";
   for (let i = 0; i < sceneLines.length; i++) {
     const { line, paragraph_num } = sceneLines[i]!;
-    const marker = flaggedIndices.includes(i) ? "  ⚠ NEEDS REVIEW" : "";
+    const flagged = flaggedIndices.includes(i);
+    const marker = flagged
+      ? line.ai_reviewed
+        ? "  ⚠ RE-CHECK — keep current speaker unless source clearly contradicts"
+        : "  ⚠ NEEDS REVIEW"
+      : "";
     const hasSource = !!sourceParagraphs?.[paragraph_num]?.trim();
     const textNote = hasSource
       ? `(paragraph ${paragraph_num} — see source above)`
@@ -143,14 +182,15 @@ ${parts.join("\n\n")}
 CHARACTER ROSTER:
 ${rosterText}
 
-${sourceBlock}CURRENT LINE ATTRIBUTIONS (rules engine — may be wrong):
+${sourceBlock}CURRENT LINE ATTRIBUTIONS (existing assignments — treat character speakers as strong priors):
 ${sceneText}
 
-Lines marked "⚠ NEEDS REVIEW" need a corrected speaker. Use the SOURCE MANUSCRIPT for quote boundaries and conversational flow — not the rules-engine fragments.
+Lines marked "⚠ NEEDS REVIEW" need a first-pass speaker. Lines marked "⚠ RE-CHECK" were reviewed before — only change them if the SOURCE MANUSCRIPT clearly contradicts the current speaker. Use the source for quote boundaries and conversational flow.
 
 Important rules:
 - "Narrator" is correct for non-dialogue (descriptive prose, action beats)
-- Quoted speech must be assigned to a character, not Narrator
+- Quoted speech must be assigned to a character, not Narrator — never change a character line to Narrator when quotes appear in the source
+- If the current speaker matches quoted dialogue in the source, return that same speaker with high confidence
 - Use exact canonical names from the roster (e.g. "Nikki Sands" not "Nikki")
 - If you cannot determine the speaker with confidence, return "UNKNOWN"
 - Consider conversation flow: in a 2-person dialogue, speakers usually alternate
@@ -164,7 +204,7 @@ Respond with ONLY valid JSON, no markdown or explanation:
   ]
 }
 
-Only include line indices that were marked NEEDS REVIEW. Confidence should be
+Only include line indices marked NEEDS REVIEW or RE-CHECK. Confidence should be
 "high", "medium", or "low" based on how certain you are.`;
 }
 
@@ -313,10 +353,15 @@ export async function runAiAssistedPass(
         const newSpeaker = attr.speaker;
         const confidence =
           (attr.confidence as TaggedLine["confidence"]) ?? "medium";
+        const line = taggedLines[globalIdx]!;
+
+        if (!shouldProposeSpeakerChange(line, oldSpeaker, newSpeaker)) {
+          continue;
+        }
 
         const lineId = options?.lineIds?.[globalIdx] ?? "";
         const lineOrder =
-          options?.lineOrders?.[globalIdx] ?? taggedLines[globalIdx]!.paragraph_num;
+          options?.lineOrders?.[globalIdx] ?? line.paragraph_num;
 
         proposals.push({
           line_id: lineId,

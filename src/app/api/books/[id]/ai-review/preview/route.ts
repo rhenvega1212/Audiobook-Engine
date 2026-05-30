@@ -29,6 +29,7 @@ export async function POST(
   let includeAiReviewed = false;
   let scope: AiReviewScope = { type: "flagged" };
   let chapters: BookChapterRow[] = [];
+  let processedIndices: number[] = [];
 
   try {
     const body = await request.json().catch(() => ({}));
@@ -41,6 +42,11 @@ export async function POST(
     }
     if (Array.isArray(body.chapters)) {
       chapters = body.chapters as BookChapterRow[];
+    }
+    if (Array.isArray(body.processed_indices)) {
+      processedIndices = body.processed_indices.filter(
+        (n: unknown) => typeof n === "number" && Number.isFinite(n)
+      );
     }
   } catch {
     // defaults
@@ -63,6 +69,7 @@ export async function POST(
       includeAiReviewed,
       scope,
       chapters,
+      processedIndices,
     });
     return NextResponse.json(result);
   } catch (e) {

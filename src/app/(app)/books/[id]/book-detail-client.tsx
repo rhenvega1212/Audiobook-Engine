@@ -379,7 +379,7 @@ export function BookDetailClient({
             </p>
           </div>
         )}
-        {aiReviewLoading && (
+        {aiReviewLoading && !aiPreviewOpen && (
           <div className="mt-4 rounded-lg border border-burgundy/30 bg-burgundy/5 px-4 py-4 space-y-3 max-w-xl">
             <div className="flex items-center gap-2">
               <Loader2 className="h-4 w-4 animate-spin text-burgundy shrink-0" />
@@ -760,34 +760,38 @@ export function BookDetailClient({
           <DialogHeader>
             <DialogTitle>Review speakers with AI?</DialogTitle>
             <DialogDescription asChild>
-              <div className="space-y-3 text-body-sm text-slate pt-1">
+              <div className="space-y-3 text-body-sm text-bone/90 pt-1">
                 <p>
-                  Claude will read scenes from your <strong>original Word file</strong>{" "}
+                  Claude will read scenes from your{" "}
+                  <strong className="text-bone font-semibold">original Word file</strong>{" "}
                   (with quotation marks) and suggest speaker fixes for ambiguous lines.
                 </p>
-                <ul className="list-disc pl-5 space-y-1">
+                <ul className="list-disc pl-5 space-y-1 marker:text-bone/70">
                   <li>
-                    <strong>Does not</strong> re-import the manuscript or undo cleanup
-                    deletions
+                    <strong className="text-bone font-semibold">Does not</strong> re-import
+                    the manuscript or undo cleanup deletions
                   </li>
                   <li>
-                    <strong>Does not</strong> change lines you already confirmed in
-                    Review or Speaker studio
+                    <strong className="text-bone font-semibold">Does not</strong> change lines
+                    you already confirmed in Review or Speaker studio
                   </li>
                   <li>
-                    You&apos;ll <strong>preview every change</strong> before anything is
-                    saved — uncheck wrong suggestions, then apply
+                    You&apos;ll{" "}
+                    <strong className="text-bone font-semibold">preview every change</strong>{" "}
+                    before anything is saved — uncheck wrong suggestions, then apply
                   </li>
                   <li>
-                    Snapshot saved on apply so you can <strong>Undo last AI review</strong>
+                    Snapshot saved on apply so you can{" "}
+                    <strong className="text-bone font-semibold">Undo last AI review</strong>
                   </li>
                   <li>
-                    Only clears flags when Claude is <strong>highly</strong> confident
-                    — medium/low stays flagged for you
+                    Only clears flags when Claude is{" "}
+                    <strong className="text-bone font-semibold">highly</strong> confident —
+                    medium/low stays flagged for you
                   </li>
                 </ul>
                 {flaggedCount > 0 && (
-                  <p>
+                  <p className="text-bone/80">
                     {flaggedCount.toLocaleString()} line
                     {flaggedCount === 1 ? "" : "s"} currently flagged.
                   </p>
@@ -822,8 +826,9 @@ export function BookDetailClient({
                 className="mt-1 rounded"
               />
               <span>
-                Also re-check lines AI already reviewed (use if Claude got some
-                speakers wrong last time)
+                Also re-check uncertain AI-reviewed lines (still flagged or not
+                yet high-confidence). Settled high-confidence assignments are
+                kept as-is.
               </span>
             </label>
           </div>
@@ -843,6 +848,8 @@ export function BookDetailClient({
         open={aiPreviewOpen}
         proposals={aiProposals}
         loading={aiPreviewLoading}
+        progress={aiReviewProgress}
+        progressMessage={aiReviewMessage}
         onOpenChange={setAiPreviewOpen}
         onApplied={handleAiApplied}
       />
