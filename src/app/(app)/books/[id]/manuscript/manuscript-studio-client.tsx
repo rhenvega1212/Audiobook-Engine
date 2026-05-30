@@ -34,7 +34,15 @@ import {
 import { useLineAudioPlayer } from "@/components/audio/line-player";
 import { findCharacterBySpeaker } from "@/lib/characters/resolve-character";
 import { LineSelectionToolbar } from "@/components/manuscript/line-selection-toolbar";
+import { ManuscriptSelectionToolbar } from "@/components/manuscript/manuscript-selection-toolbar";
+import { ManuscriptHotkeysDialog } from "@/components/manuscript/manuscript-hotkeys-dialog";
 import type { TextSelectionPayload } from "@/lib/manuscript/text-selection";
+import { isSplitInsideQuote } from "@/lib/engine/quote-spans";
+import {
+  findCommandForEvent,
+  isEditableTarget,
+  loadHotkeyConfig,
+} from "@/lib/manuscript/hotkeys";
 import {
   Dialog,
   DialogContent,
@@ -182,6 +190,8 @@ export function ManuscriptStudioClient({
   const [chapterDialogOpen, setChapterDialogOpen] = useState(false);
   const [chapterTitle, setChapterTitle] = useState("");
   const [chapterSaving, setChapterSaving] = useState(false);
+  const [hotkeysOpen, setHotkeysOpen] = useState(false);
+  const jumpInputRef = useRef<HTMLInputElement>(null);
   const lastSelectedIndexRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -720,6 +730,16 @@ export function ManuscriptStudioClient({
 
   async function applyTextSplit() {
     if (!textSelection || !splitSpeaker) return;
+    const line = lines.find((l) => l.id === textSelection.lineId);
+    if (
+      line &&
+      isSplitInsideQuote(line.line_text, textSelection.start, textSelection.end)
+    ) {
+      toast.error(
+        "Can't split inside quoted dialogue. Select text outside quotes or the full spoken line."
+      );
+      return;
+    }
     const { speaker_label, speaker_character_id } = resolveSpeaker(
       splitSpeaker,
       rosterCharacters,
@@ -860,6 +880,129 @@ export function ManuscriptStudioClient({
     }
   }
 
+  function toggleBulkExport() {
+    const selected = lines.filter((l) => selectedIds.has(l.id));
+    if (selected.length === 0) return;
+    const allExcluded = selected.every((l) => l.excluded_from_export);
+    void applyBulkExclude(!allExcluded);
+  }
+
+  function navigateChapter(direction: -1 | 1) {
+    const navigable = chapters.filter((c) => c.id !== MANUSCRIPT_FULL_ID);
+    if (navigable.length === 0) return;
+
+    const currentIdx =
+      chapterFilter === MANUSCRIPT_FULL_ID
+        ? direction === 1
+          ? -1
+          : navigable.length
+        : navigable.findIndex((c) => c.id === chapterFilter);
+
+    const nextIdx = currentIdx + direction;
+    if (nextIdx < 0 || nextIdx >= navigable.length) return;
+    handleChapterChange(navigable[nextIdx]!.id);
+  }
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (isEditableTarget(e.target)) return;
+
+      const command = findCommandForEvent(e, loadHotkeyConfig());
+      if (!command) return;
+
+      if (command === "showHelp") {
+        e.preventDefault();
+        setHotkeysOpen(true);
+        return;
+      }
+
+      if (command === "clearSelection") {
+        if (textSelection) {
+          e.preventDefault();
+          setTextSelection(null);
+          window.getSelection()?.removeAllRanges();
+        } else if (selectedIds.size > 0) {
+          e.preventDefault();
+          clearSelection();
+        }
+        return;
+      }
+
+      if (command === "jumpLine") {
+        e.preventDefault();
+        jumpInputRef.current?.focus();
+        return;
+      }
+
+      if (command === "prevChapter") {
+        e.preventDefault();
+        navigateChapter(-1);
+        return;
+      }
+
+      if (command === "nextChapter") {
+        e.preventDefault();
+        navigateChapter(1);
+        return;
+      }
+
+      if (command === "splitSelection" && textSelection && splitSpeaker) {
+        e.preventDefault();
+        void applyTextSplit();
+        return;
+      }
+
+      if (selectedIds.size === 0) return;
+
+      if (command === "assignSpeaker") {
+        e.preventDefault();
+        const trigger = document.querySelector<HTMLButtonElement>(
+          "[data-hotkey-speaker] button"
+        );
+        trigger?.click();
+        return;
+      }
+
+      if (command === "merge" && areSelectedLinesAdjacent(lines, selectedIds)) {
+        e.preventDefault();
+        void applyMergeSelected();
+        return;
+      }
+
+      if (command === "delete") {
+        e.preventDefault();
+        setDeleteOpen(true);
+        return;
+      }
+
+      if (command === "toggleExport") {
+        e.preventDefault();
+        toggleBulkExport();
+        return;
+      }
+
+      if (command === "chapterStart" && selectedIds.size === 1) {
+        e.preventDefault();
+        openChapterDialog();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handlers read latest state
+  }, [
+    selectedIds,
+    textSelection,
+    splitSpeaker,
+    lines,
+    chapters,
+    chapterFilter,
+  ]);
+
+  const textSelectionLine = textSelection
+    ? lines.find((l) => l.id === textSelection.lineId)
+    : null;
+
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] max-w-7xl mx-auto w-full px-2 sm:px-0">
       <div className="shrink-0 pb-4">
@@ -935,6 +1078,7 @@ export function ManuscriptStudioClient({
             <div className="mt-1 flex gap-2">
               <Input
                 id="ms-jump"
+                ref={jumpInputRef}
                 className="h-9"
                 inputMode="numeric"
                 placeholder="e.g. 1204"
@@ -1009,7 +1153,30 @@ export function ManuscriptStudioClient({
           />
         )}
 
-        <div className="flex-1 min-h-0 flex flex-col">
+        <div className="flex-1 min-h-0 flex flex-col gap-2">
+      {selectedIds.size > 0 && (
+        <ManuscriptSelectionToolbar
+          bookId={bookId}
+          selectedCount={selectedIds.size}
+          bulkSpeaker={bulkSpeaker}
+          onBulkSpeakerChange={(id, character) => {
+            setBulkSpeaker(id);
+            setBulkSpeakerHint(character);
+          }}
+          onCharacterCreated={handleCharacterCreated}
+          characters={rosterPick}
+          canMerge={areSelectedLinesAdjacent(lines, selectedIds)}
+          canChapterStart={selectedIds.size === 1}
+          busy={bulkSaving}
+          onApplySpeaker={() => void applyBulkSpeaker()}
+          onToggleExport={toggleBulkExport}
+          onMerge={() => void applyMergeSelected()}
+          onChapterStart={openChapterDialog}
+          onDelete={() => setDeleteOpen(true)}
+          onClear={clearSelection}
+          onShowHelp={() => setHotkeysOpen(true)}
+        />
+      )}
       {compactView ? (
         <VirtualManuscriptList
           items={blocks.map((b) => ({ ...b, id: b.key }))}
@@ -1077,10 +1244,11 @@ export function ManuscriptStudioClient({
         </div>
       </div>
 
-      {textSelection && !compactView && (
+      {textSelection && !compactView && textSelectionLine && (
         <LineSelectionToolbar
           bookId={bookId}
           selection={textSelection}
+          lineText={textSelectionLine.line_text}
           characters={rosterPick}
           speakerValue={splitSpeaker}
           onSpeakerChange={(value, character) => {
@@ -1097,87 +1265,10 @@ export function ManuscriptStudioClient({
         />
       )}
 
-      {selectedIds.size > 0 && (
-        <div className="shrink-0 mt-3 rounded-lg border border-burgundy/30 bg-burgundy/5 px-4 py-3 flex flex-wrap items-end gap-3">
-          <p className="text-body-sm font-medium text-ink w-full sm:w-auto">
-            {selectedIds.size} line{selectedIds.size === 1 ? "" : "s"} selected
-          </p>
-          <div className="flex flex-wrap items-end gap-2 flex-1">
-            <div>
-              <Label className="text-xs">Assign speaker</Label>
-              <SpeakerSelect
-                className="mt-1 w-[11rem]"
-                bookId={bookId}
-                includeUnknown
-                value={bulkSpeaker}
-                characters={rosterPick as SpeakerCharacter[]}
-                onCharacterCreated={handleCharacterCreated}
-                onValueChange={(id, character) => {
-                  setBulkSpeaker(id);
-                  setBulkSpeakerHint(character);
-                }}
-                placeholder="Choose…"
-              />
-            </div>
-            <Button
-              type="button"
-              size="sm"
-              disabled={!bulkSpeaker || bulkSaving}
-              onClick={() => void applyBulkSpeaker()}
-            >
-              Apply speaker
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={bulkSaving}
-              onClick={() => void applyBulkExclude(true)}
-            >
-              Skip export
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={bulkSaving}
-              onClick={() => void applyBulkExclude(false)}
-            >
-              Include in export
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={
-                bulkSaving || !areSelectedLinesAdjacent(lines, selectedIds)
-              }
-              onClick={() => void applyMergeSelected()}
-            >
-              Merge lines
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={bulkSaving || selectedIds.size !== 1}
-              onClick={openChapterDialog}
-            >
-              Set chapter start
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="text-dark-red border-dark-red/40 hover:bg-dark-red/10"
-              disabled={bulkSaving}
-              onClick={() => setDeleteOpen(true)}
-            >
-              Delete from book
-            </Button>
-          </div>
-        </div>
-      )}
+      <ManuscriptHotkeysDialog
+        open={hotkeysOpen}
+        onOpenChange={setHotkeysOpen}
+      />
 
       <Dialog open={chapterDialogOpen} onOpenChange={setChapterDialogOpen}>
         <DialogContent>

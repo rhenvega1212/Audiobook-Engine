@@ -54,6 +54,11 @@ export type Book = {
   status: BookStatus;
   ai_budget_usd?: number;
   ai_spend_usd?: number;
+  import_word_coverage?: number | null;
+  import_paragraph_count?: number | null;
+  import_line_count?: number | null;
+  import_chapter_count?: number | null;
+  analyzed_at?: string | null;
   uploaded_by: string | null;
   created_at: string;
   updated_at: string;

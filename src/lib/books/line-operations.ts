@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
 import { updateBookStatus } from "@/lib/books/compute-book-status";
+import { isSplitInsideQuote } from "@/lib/engine/quote-spans";
 
 export type LineSegment = {
   line_text: string;
@@ -176,6 +177,12 @@ export async function splitTaggedLine(
   const text = line.line_text;
   if (start < 0 || end > text.length || start >= end) {
     throw new Error("Invalid selection range");
+  }
+
+  if (isSplitInsideQuote(text, start, end)) {
+    throw new Error(
+      "Cannot split inside quoted dialogue. Select text outside quotes or the full spoken line."
+    );
   }
 
   if (start === 0 && end === text.length) {

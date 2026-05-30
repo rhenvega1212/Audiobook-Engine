@@ -51,6 +51,11 @@ export default async function BookDetailPage({
 
   const flaggedCount = lines.filter((l) => l.flag_reason).length;
 
+  const { count: chapterCount } = await supabase
+    .from("book_chapters")
+    .select("*", { count: "exact", head: true })
+    .eq("book_id", id);
+
   const detectedMap = new Map<string, { count: number; samples: string[] }>();
 
   for (const bc of bookChars ?? []) {
@@ -106,6 +111,8 @@ export default async function BookDetailPage({
       detectedCharacters={detected_characters}
       flaggedCount={flaggedCount}
       roster={roster ?? []}
+      lineCount={lines.length}
+      chapterCount={chapterCount ?? 0}
     />
   );
 }

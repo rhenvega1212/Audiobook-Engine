@@ -14,7 +14,7 @@ import { rebuildAutoBookChapters } from "@/lib/books/book-chapters";
 import type { Character } from "@/lib/types/database";
 
 const INSERT_BATCH = 500;
-const MIN_WORD_COVERAGE = 0.92;
+const MIN_WORD_COVERAGE = 0.98;
 
 export async function analyzeBook(bookId: string, options?: { runAiReview?: boolean }) {
   const admin = createAdminClient();
@@ -71,14 +71,14 @@ async function runAnalysis(
   }
 
   const buffer = Buffer.from(await fileData.arrayBuffer());
-  const { paragraphs } = await extractManuscriptParagraphs(buffer);
+  const { paragraphs, blockCount } = await extractManuscriptParagraphs(buffer);
   const result = processManuscriptFromParagraphs(paragraphs, roster);
 
   const coverage = measureManuscriptCoverage(paragraphs, result.lines);
   if (coverage.word_coverage < MIN_WORD_COVERAGE) {
-    console.warn(
-      `Manuscript coverage low for book ${bookId}: ${(coverage.word_coverage * 100).toFixed(1)}% words preserved`,
-      { thin_paragraphs: coverage.thin_paragraphs.slice(0, 5) }
+    throw new Error(
+      `Import preserved only ${(coverage.word_coverage * 100).toFixed(1)}% of manuscript words (need ${(MIN_WORD_COVERAGE * 100).toFixed(0)}%). ` +
+        `Re-check the docx or contact support. Thin blocks: ${coverage.thin_paragraphs.slice(0, 5).join(", ") || "none"}.`
     );
   }
 
@@ -185,10 +185,28 @@ async function runAnalysis(
     await admin.from("book_characters").insert(bookCharRows);
   }
 
+  let chapterCount = 0;
   try {
-    await rebuildAutoBookChapters(admin, bookId);
+    chapterCount = await rebuildAutoBookChapters(admin, bookId);
   } catch (e) {
     console.warn("Chapter sync skipped:", e);
+  }
+
+  const statsPayload = {
+    import_word_coverage: coverage.word_coverage,
+    import_paragraph_count: blockCount,
+    import_line_count: result.total_lines,
+    import_chapter_count: chapterCount,
+    analyzed_at: new Date().toISOString(),
+  };
+
+  const { error: statsError } = await admin
+    .from("books")
+    .update(statsPayload as Record<string, unknown>)
+    .eq("id", bookId);
+
+  if (statsError) {
+    console.warn("Could not save import stats (run migration 20250530000001):", statsError.message);
   }
 
   let status = await updateBookStatus(admin, bookId);
@@ -253,6 +271,8 @@ async function runAnalysis(
     flagged_count: result.flagged_count,
     unknown_speakers: result.unknown_speakers,
     word_coverage: coverage.word_coverage,
+    paragraph_count: blockCount,
+    chapter_count: chapterCount,
     status,
     ai_review: aiReview
       ? {

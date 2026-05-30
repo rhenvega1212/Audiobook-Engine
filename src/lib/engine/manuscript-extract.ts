@@ -10,14 +10,33 @@ function decodeHtmlEntities(text: string): string {
     .replace(/&nbsp;/g, " ");
 }
 
-/** Extract paragraph blocks from a .docx buffer. */
+function stripInlineTags(html: string): string {
+  return decodeHtmlEntities(html.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, ""))
+    .replace(/\u00a0/g, " ")
+    .trim();
+}
+
+/** Extract ordered blocks from mammoth HTML — headings, paragraphs, list items. */
+export function extractBlocksFromHtml(html: string): string[] {
+  const blocks: string[] = [];
+  const re =
+    /<(h[1-6]|p|li)[^>]*>([\s\S]*?)<\/\1>/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = re.exec(html)) !== null) {
+    const text = stripInlineTags(match[2]!);
+    if (text) blocks.push(text);
+  }
+
+  return blocks;
+}
+
+/** Extract paragraph blocks from a .docx buffer (verbatim — no block types dropped). */
 export async function extractManuscriptParagraphs(
   buffer: Buffer
-): Promise<{ paragraphs: string[]; rawText: string }> {
+): Promise<{ paragraphs: string[]; rawText: string; blockCount: number }> {
   const { value: html } = await mammoth.convertToHtml({ buffer });
-  const fromHtml = [...html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
-    .map((m) => decodeHtmlEntities(m[1].replace(/<[^>]+>/g, "")).trim())
-    .filter(Boolean);
+  const fromHtml = extractBlocksFromHtml(html);
 
   const { value: rawText } = await mammoth.extractRawText({ buffer });
   const fromText = rawText
@@ -26,10 +45,13 @@ export async function extractManuscriptParagraphs(
     .map((p) => p.trim())
     .filter(Boolean);
 
+  // Prefer HTML blocks when they capture structure; fall back to raw text lines
   const paragraphs =
-    fromHtml.length >= fromText.length * 0.9 ? fromHtml : fromText;
+    fromHtml.length >= Math.max(1, fromText.length * 0.85)
+      ? fromHtml
+      : fromText;
 
-  return { paragraphs, rawText };
+  return { paragraphs, rawText, blockCount: paragraphs.length };
 }
 
 /** Compare source paragraphs to emitted lines — flags dropped wording. */
@@ -54,19 +76,26 @@ export function measureManuscriptCoverage(
   let matchedWords = 0;
 
   for (let i = 0; i < paragraphs.length; i++) {
-    const source = normalizeWords(paragraphs[i]);
+    const source = normalizeWords(paragraphs[i]!);
     sourceWords += source.length;
     if (source.length === 0) continue;
 
     const emitted = normalizeWords((byPara.get(i) ?? []).join(" "));
     let hits = 0;
+    const used = new Set<number>();
     for (const word of source) {
-      if (emitted.includes(word)) hits++;
+      for (let j = 0; j < emitted.length; j++) {
+        if (!used.has(j) && emitted[j] === word) {
+          used.add(j);
+          hits++;
+          break;
+        }
+      }
     }
     matchedWords += hits;
 
     const ratio = hits / source.length;
-    if (ratio >= 0.85) coveredParas++;
+    if (ratio >= 0.95) coveredParas++;
     else thin.push(i);
   }
 
@@ -80,8 +109,11 @@ export function measureManuscriptCoverage(
 }
 
 function normalizeWords(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[""]/g, '"')
-    .match(/[\w']+/g) ?? [];
+  return (
+    text
+      .toLowerCase()
+      .replace(/[""]/g, '"')
+      .replace(/['']/g, "'")
+      .match(/[\w']+/g) ?? []
+  );
 }

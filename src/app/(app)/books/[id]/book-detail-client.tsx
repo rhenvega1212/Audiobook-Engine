@@ -55,17 +55,26 @@ export function BookDetailClient({
   detectedCharacters,
   flaggedCount,
   roster,
+  lineCount,
+  chapterCount,
 }: {
   bookId: string;
   book: {
     id: string;
     title: string;
     status: string;
+    import_word_coverage?: number | null;
+    import_paragraph_count?: number | null;
+    import_line_count?: number | null;
+    import_chapter_count?: number | null;
+    analyzed_at?: string | null;
     series?: { name?: string; pen_names?: { name?: string } };
   };
   detectedCharacters: DetectedCharacter[];
   flaggedCount: number;
   roster: Character[];
+  lineCount: number;
+  chapterCount: number;
 }) {
   const router = useRouter();
   const [pickerChar, setPickerChar] = useState<Character | null>(null);
@@ -138,10 +147,16 @@ export function BookDetailClient({
         total_lines?: number;
         flagged_count?: number;
         word_coverage?: number;
+        chapter_count?: number;
+        paragraph_count?: number;
       };
 
+      const coveragePct =
+        summary.word_coverage != null
+          ? `${(summary.word_coverage * 100).toFixed(1)}% words`
+          : "";
       toast.success(
-        `Analysis complete — ${summary.total_lines?.toLocaleString() ?? "?"} lines, ${summary.flagged_count?.toLocaleString() ?? "?"} flagged`
+        `Analysis complete — ${summary.total_lines?.toLocaleString() ?? "?"} lines, ${summary.chapter_count?.toLocaleString() ?? "?"} chapters${coveragePct ? `, ${coveragePct} preserved` : ""}, ${summary.flagged_count?.toLocaleString() ?? "?"} flagged`
       );
       router.refresh();
     } catch (e) {
@@ -339,6 +354,53 @@ export function BookDetailClient({
             </Button>
           )}
         </div>
+        {lineCount > 0 && (
+          <Card className="mt-4 max-w-xl border-teal/20">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base font-serif">Import summary</CardTitle>
+            </CardHeader>
+            <CardContent className="grid grid-cols-2 gap-x-4 gap-y-2 text-body-sm">
+              <p className="text-slate">Lines in studio</p>
+              <p className="font-medium tabular-nums">
+                {(book.import_line_count ?? lineCount).toLocaleString()}
+              </p>
+              <p className="text-slate">Chapters detected</p>
+              <p className="font-medium tabular-nums">
+                {(book.import_chapter_count ?? chapterCount).toLocaleString()}
+              </p>
+              {book.import_paragraph_count != null && (
+                <>
+                  <p className="text-slate">Blocks from docx</p>
+                  <p className="font-medium tabular-nums">
+                    {book.import_paragraph_count.toLocaleString()}
+                  </p>
+                </>
+              )}
+              {book.import_word_coverage != null && (
+                <>
+                  <p className="text-slate">Word coverage</p>
+                  <p
+                    className={`font-medium tabular-nums ${
+                      book.import_word_coverage >= 0.98
+                        ? "text-teal"
+                        : "text-dark-red"
+                    }`}
+                  >
+                    {(book.import_word_coverage * 100).toFixed(1)}%
+                  </p>
+                </>
+              )}
+              {book.analyzed_at && (
+                <>
+                  <p className="text-slate">Last analyzed</p>
+                  <p className="font-medium">
+                    {new Date(book.analyzed_at).toLocaleString()}
+                  </p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       <div className="grid gap-8 lg:grid-cols-3">

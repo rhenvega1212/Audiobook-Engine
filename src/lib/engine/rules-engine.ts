@@ -1,5 +1,5 @@
 import type { EngineCharacter, ProcessResult, TaggedLine } from "./types";
-import { DIALOGUE_RE, NAME_RE, DIALOGUE_TAG_START_RE, CHAPTER_HEADING_RE } from "./regex";
+import { NAME_RE, DIALOGUE_TAG_START_RE, CHAPTER_HEADING_RE } from "./regex";
 import {
   DIALOGUE_VERBS,
   ACTION_TAG_VERBS,
@@ -7,6 +7,7 @@ import {
 } from "./vocabulary";
 import { flagReasonForLine, type FlagContext } from "./flag-policy";
 import { resolveFirstNameToCanonical } from "./resolve-first-name";
+import { segmentParagraphByQuotes, type TextSegment } from "./quote-spans";
 
 function findCharacter(
   name: string,
@@ -15,15 +16,9 @@ function findCharacter(
   return roster.find((c) => c.matches(name));
 }
 
+/** Preserve dialogue text verbatim — no auto-punctuation. */
 export function cleanDialogueLine(text: string): string {
-  let t = text.trim();
-  if (t.endsWith(",")) {
-    t = t.slice(0, -1).trimEnd();
-  }
-  if (t && !/[.!?…—-]$/.test(t)) {
-    t += ".";
-  }
-  return t;
+  return text.trim();
 }
 
 export function stripDialogueTag(narration: string): string {
@@ -53,7 +48,7 @@ function extractSpeakerFromAttribution(
   const hasActionVerb = words.some((w) => ACTION_TAG_VERBS.has(w));
   const hasVerb = hasDialogueVerb || hasActionVerb;
 
-  const nameCandidates = [...attributionText.matchAll(NAME_RE)].map((m) => m[1]);
+  const nameCandidates = [...attributionText.matchAll(NAME_RE)].map((m) => m[1]!);
   for (const candidate of nameCandidates) {
     const char = findCharacter(candidate, roster);
     if (char) {
@@ -79,17 +74,100 @@ function extractSpeakerFromAttribution(
 function emitNarration(
   text: string,
   paraNum: number,
-  results: TaggedLine[]
+  results: TaggedLine[],
+  stripTags = true
 ): void {
-  const trimmed = text.trim();
-  if (!trimmed) return;
+  const raw = text.trim();
+  if (!raw) return;
+  const line = stripTags ? stripDialogueTag(raw) : raw;
+  if (!line.trim()) return;
   results.push({
     speaker: "Narrator",
-    line: trimmed,
+    line: line.trim(),
     paragraph_num: paraNum,
     confidence: "high",
     flag_reason: null,
   });
+}
+
+function attributionForDialogue(
+  segments: TextSegment[],
+  dialogueIndex: number,
+  paragraph: string
+): string {
+  const seg = segments[dialogueIndex]!;
+  const after = paragraph.slice(seg.end).trim();
+  const before = paragraph.slice(0, seg.start).trim();
+
+  const afterTag = after.match(
+    /^[,.\s]*(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?|he|she|they|him|her|them)\s+(?:\w+\s+){0,3}(?:said|asked|replied|whispered|shouted|murmured|added|continued|exclaimed)/i
+  );
+  if (afterTag) return afterTag[0].trim();
+
+  const beforeTag = before.match(
+    /(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?|he|she|they)\s+(?:\w+\s+){0,3}(?:said|asked|replied|whispered|shouted|murmured|added|continued|exclaimed)[,.\s]*$/i
+  );
+  if (beforeTag) return beforeTag[0].trim();
+
+  if (dialogueIndex + 1 < segments.length) {
+    const between = paragraph.slice(seg.end, segments[dialogueIndex + 1]!.start).trim();
+    if (between) return between;
+  }
+
+  return (before + " " + after).trim();
+}
+
+function inferSpeaker(
+  speaker: string | null,
+  confidence: TaggedLine["confidence"],
+  firstNameOnlyMatch: boolean,
+  conversationParticipants: string[],
+  recentDialogueCount: number
+): {
+  speaker: string;
+  confidence: TaggedLine["confidence"];
+  inferenceKind: FlagContext["inferenceKind"];
+  firstNameOnlyMatch: boolean;
+} {
+  if (speaker !== null) {
+    return {
+      speaker,
+      confidence,
+      inferenceKind: confidence === "low" ? "pronoun" : "none",
+      firstNameOnlyMatch,
+    };
+  }
+
+  if (
+    conversationParticipants.length === 2 &&
+    recentDialogueCount >= 1
+  ) {
+    const lastSpeaker =
+      conversationParticipants[conversationParticipants.length - 1]!;
+    return {
+      speaker:
+        conversationParticipants.find((p) => p !== lastSpeaker) ?? lastSpeaker,
+      confidence: "low",
+      inferenceKind: "back_and_forth",
+      firstNameOnlyMatch: false,
+    };
+  }
+
+  if (conversationParticipants.length > 0 && recentDialogueCount >= 2) {
+    return {
+      speaker: conversationParticipants[conversationParticipants.length - 1]!,
+      confidence: "low",
+      inferenceKind: "last_speaker",
+      firstNameOnlyMatch: false,
+    };
+  }
+
+  return {
+    speaker: "UNKNOWN",
+    confidence: "none",
+    inferenceKind: "no_context",
+    firstNameOnlyMatch: false,
+  };
 }
 
 function splitParagraphIntoLines(
@@ -97,59 +175,49 @@ function splitParagraphIntoLines(
   paraNum: number,
   roster: EngineCharacter[],
   lastNamedSpeakers: Record<string, string>,
-  conversationParticipants: string[]
+  conversationParticipants: string[],
+  recentDialogueCount: number
 ): TaggedLine[] {
   const results: TaggedLine[] = [];
-  const matches = [...paragraph.matchAll(DIALOGUE_RE)];
+  const segments = segmentParagraphByQuotes(paragraph);
 
-  if (matches.length === 0) {
+  if (segments.length === 0) {
     emitNarration(paragraph, paraNum, results);
     return results;
   }
 
-  let cursor = 0;
-  for (let idx = 0; idx < matches.length; idx++) {
-    const match = matches[idx];
-    const preText = paragraph.slice(cursor, match.index!).trim();
-    const nextStart =
-      idx + 1 < matches.length ? matches[idx + 1].index! : paragraph.length;
-    const postText = paragraph.slice(match.index! + match[0].length, nextStart).trim();
+  let dialogueIdx = 0;
+  for (const seg of segments) {
+    if (seg.kind === "narration") {
+      emitNarration(seg.text, paraNum, results, true);
+      continue;
+    }
 
-    const attributionContext = (preText + " " + postText).trim();
+    const attributionContext = attributionForDialogue(
+      segments,
+      dialogueIdx,
+      paragraph
+    );
+    dialogueIdx++;
+
     let [speaker, confidence, firstNameOnlyMatch] = extractSpeakerFromAttribution(
       attributionContext,
       roster,
       lastNamedSpeakers
     );
 
-    if (preText) {
-      emitNarration(preText, paraNum, results);
-    }
+    const inferred = inferSpeaker(
+      speaker,
+      confidence,
+      firstNameOnlyMatch,
+      conversationParticipants,
+      recentDialogueCount
+    );
+    speaker = inferred.speaker;
+    confidence = inferred.confidence;
+    firstNameOnlyMatch = inferred.firstNameOnlyMatch;
 
-    const dialogueText = cleanDialogueLine(match[1]);
-    let inferenceKind: FlagContext["inferenceKind"] = "none";
-
-    if (speaker === null) {
-      firstNameOnlyMatch = false;
-      if (conversationParticipants.length === 2) {
-        const lastSpeaker =
-          conversationParticipants[conversationParticipants.length - 1];
-        speaker =
-          conversationParticipants.find((p) => p !== lastSpeaker) ?? lastSpeaker;
-        confidence = "low";
-        inferenceKind = "back_and_forth";
-      } else if (conversationParticipants.length > 0) {
-        speaker = conversationParticipants[conversationParticipants.length - 1];
-        confidence = "low";
-        inferenceKind = "last_speaker";
-      } else {
-        speaker = "UNKNOWN";
-        confidence = "none";
-        inferenceKind = "no_context";
-      }
-    } else if (confidence === "low") {
-      inferenceKind = "pronoun";
-    }
+    const dialogueText = cleanDialogueLine(seg.text);
 
     const rosterResolved =
       speaker === "Narrator" ||
@@ -161,7 +229,7 @@ function splitParagraphIntoLines(
       confidence,
       rosterResolved,
       firstNameOnlyMatch,
-      inferenceKind,
+      inferenceKind: inferred.inferenceKind,
     });
 
     results.push({
@@ -171,17 +239,13 @@ function splitParagraphIntoLines(
       confidence,
       flag_reason: flag,
     });
-
-    cursor = match.index! + match[0].length;
-  }
-
-  const trailing = paragraph.slice(cursor).trim();
-  if (trailing) {
-    emitNarration(trailing, paraNum, results);
   }
 
   return results;
 }
+
+const SCENE_BREAK_RE =
+  /^(\*{3,}|-{3,}|#{1,3}\s|(?:scene|Scene)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b)/;
 
 export function processManuscriptFromParagraphs(
   paragraphs: string[],
@@ -191,11 +255,12 @@ export function processManuscriptFromParagraphs(
   const detectedUnknownSpeakers = new Set<string>();
   let lastNamedSpeakers: Record<string, string> = {};
   let conversationParticipants: string[] = [];
+  let recentDialogueCount = 0;
 
   for (let i = 0; i < paragraphs.length; i++) {
-    const para = paragraphs[i];
+    const para = paragraphs[i]!;
 
-    if (CHAPTER_HEADING_RE.test(para)) {
+    if (CHAPTER_HEADING_RE.test(para) || SCENE_BREAK_RE.test(para)) {
       allLines.push({
         speaker: "Narrator",
         line: para,
@@ -205,6 +270,7 @@ export function processManuscriptFromParagraphs(
       });
       conversationParticipants = [];
       lastNamedSpeakers = {};
+      recentDialogueCount = 0;
       continue;
     }
 
@@ -213,7 +279,8 @@ export function processManuscriptFromParagraphs(
       i,
       roster,
       lastNamedSpeakers,
-      conversationParticipants
+      conversationParticipants,
+      recentDialogueCount
     );
 
     for (const line of lines) {
@@ -224,6 +291,7 @@ export function processManuscriptFromParagraphs(
         if (conversationParticipants.length > 3) {
           conversationParticipants = conversationParticipants.slice(-3);
         }
+        recentDialogueCount++;
 
         if (line.confidence === "high" || line.confidence === "medium") {
           const char = findCharacter(line.speaker, roster);
@@ -231,10 +299,12 @@ export function processManuscriptFromParagraphs(
             lastNamedSpeakers[char.gender] = line.speaker;
           }
         }
+      } else if (line.speaker === "Narrator") {
+        recentDialogueCount = 0;
       } else if (line.speaker === "UNKNOWN") {
         for (const m of line.line.matchAll(NAME_RE)) {
-          if (!findCharacter(m[1], roster)) {
-            detectedUnknownSpeakers.add(m[1]);
+          if (!findCharacter(m[1]!, roster)) {
+            detectedUnknownSpeakers.add(m[1]!);
           }
         }
       }

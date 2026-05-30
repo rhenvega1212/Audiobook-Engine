@@ -8,10 +8,13 @@ import {
 } from "@/components/books/speaker-select";
 import type { Character } from "@/lib/types/database";
 import type { TextSelectionPayload } from "@/lib/manuscript/text-selection";
+import { isSplitInsideQuote } from "@/lib/engine/quote-spans";
+import { formatHotkey, loadHotkeyConfig } from "@/lib/manuscript/hotkeys";
 
 export function LineSelectionToolbar({
   bookId,
   selection,
+  lineText,
   characters,
   speakerValue,
   onSpeakerChange,
@@ -22,6 +25,7 @@ export function LineSelectionToolbar({
 }: {
   bookId: string;
   selection: TextSelectionPayload;
+  lineText: string;
   characters: Pick<Character, "id" | "canonical_name">[];
   speakerValue: string;
   onSpeakerChange: (value: string, character?: SpeakerCharacter) => void;
@@ -31,6 +35,12 @@ export function LineSelectionToolbar({
   busy?: boolean;
 }) {
   const [position, setPosition] = useState({ top: 0, left: 0 });
+  const splitInvalid = isSplitInsideQuote(
+    lineText,
+    selection.start,
+    selection.end
+  );
+  const splitKey = formatHotkey(loadHotkeyConfig().splitSelection);
 
   useEffect(() => {
     const pad = 8;
@@ -53,6 +63,12 @@ export function LineSelectionToolbar({
         “{selection.selectedText.slice(0, 40)}
         {selection.selectedText.length > 40 ? "…" : ""}”
       </p>
+      {splitInvalid && (
+        <p className="text-[10px] text-dark-red w-full">
+          Can&apos;t split inside quoted dialogue — select the full line or text
+          outside quotes.
+        </p>
+      )}
       <SpeakerSelect
         bookId={bookId}
         size="compact"
@@ -63,8 +79,15 @@ export function LineSelectionToolbar({
         onCharacterCreated={onCharacterCreated}
         onValueChange={(value, character) => onSpeakerChange(value, character)}
       />
-      <Button type="button" size="sm" className="h-8" disabled={busy} onClick={onSplit}>
-        {busy ? "Splitting…" : "Split & assign"}
+      <Button
+        type="button"
+        size="sm"
+        className="h-8"
+        disabled={busy || splitInvalid}
+        onClick={onSplit}
+        title={splitKey}
+      >
+        {busy ? "Splitting…" : `Split (${splitKey})`}
       </Button>
       <Button type="button" size="sm" variant="ghost" className="h-8" onClick={onDismiss}>
         Cancel
