@@ -1,4 +1,26 @@
 import mammoth from "mammoth";
+import { isChapterHeadingText } from "@/lib/books/book-chapters";
+
+export type ManuscriptBlockKind = "heading" | "paragraph" | "list";
+
+export type ManuscriptBlock = {
+  text: string;
+  kind: ManuscriptBlockKind;
+  /** 1–6 for Word heading styles mapped to h1–h6 */
+  headingLevel?: number;
+};
+
+const MAMMOTH_STYLE_MAP = [
+  "p[style-name='Heading 1'] => h1:fresh",
+  "p[style-name='Heading 2'] => h2:fresh",
+  "p[style-name='Heading 3'] => h3:fresh",
+  "p[style-name='Heading 4'] => h4:fresh",
+  "p[style-name='Heading 5'] => h5:fresh",
+  "p[style-name='Heading 6'] => h6:fresh",
+  "p[style-name='Chapter Heading'] => h1:fresh",
+  "p[style-name='chapter heading'] => h1:fresh",
+  "p[style-name='Chapter Title'] => h1:fresh",
+].join("\n");
 
 function decodeHtmlEntities(text: string): string {
   return text
@@ -11,47 +33,108 @@ function decodeHtmlEntities(text: string): string {
 }
 
 function stripInlineTags(html: string): string {
-  return decodeHtmlEntities(html.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, ""))
+  return decodeHtmlEntities(
+    html.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "")
+  )
     .replace(/\u00a0/g, " ")
     .trim();
 }
 
 /** Extract ordered blocks from mammoth HTML — headings, paragraphs, list items. */
-export function extractBlocksFromHtml(html: string): string[] {
-  const blocks: string[] = [];
-  const re =
-    /<(h[1-6]|p|li)[^>]*>([\s\S]*?)<\/\1>/gi;
+export function extractBlocksFromHtml(html: string): ManuscriptBlock[] {
+  const blocks: ManuscriptBlock[] = [];
+  const re = /<(h[1-6]|p|li)[^>]*>([\s\S]*?)<\/\1>/gi;
   let match: RegExpExecArray | null;
 
   while ((match = re.exec(html)) !== null) {
+    const tag = match[1]!.toLowerCase();
     const text = stripInlineTags(match[2]!);
-    if (text) blocks.push(text);
+    if (!text) continue;
+
+    if (tag.startsWith("h")) {
+      blocks.push({
+        text,
+        kind: "heading",
+        headingLevel: parseInt(tag.charAt(1), 10),
+      });
+    } else if (tag === "li") {
+      blocks.push({ text, kind: "list" });
+    } else {
+      blocks.push({ text, kind: "paragraph" });
+    }
   }
 
   return blocks;
 }
 
-/** Extract paragraph blocks from a .docx buffer (verbatim — no block types dropped). */
-export async function extractManuscriptParagraphs(
-  buffer: Buffer
-): Promise<{ paragraphs: string[]; rawText: string; blockCount: number }> {
-  const { value: html } = await mammoth.convertToHtml({ buffer });
-  const fromHtml = extractBlocksFromHtml(html);
+/** True when a docx block should start a new chapter in the studio. */
+export function isLikelyChapterBlock(block: ManuscriptBlock): boolean {
+  const t = block.text.trim();
+  if (!t) return false;
+  if (isChapterHeadingText(t)) return true;
+  if (block.kind === "heading" && block.headingLevel === 1) {
+    return /^chapter\s+\d+/i.test(t);
+  }
+  return false;
+}
 
-  const { value: rawText } = await mammoth.extractRawText({ buffer });
-  const fromText = rawText
+function blocksFromRawText(rawText: string): ManuscriptBlock[] {
+  return rawText
     .replace(/\r\n/g, "\n")
     .split(/\n+/)
     .map((p) => p.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((text) => ({ text, kind: "paragraph" as const }));
+}
 
-  // Prefer HTML blocks when they capture structure; fall back to raw text lines
-  const paragraphs =
-    fromHtml.length >= Math.max(1, fromText.length * 0.85)
-      ? fromHtml
-      : fromText;
+/** Full verbatim extract from a .docx buffer. */
+export async function extractManuscriptBlocks(
+  buffer: Buffer
+): Promise<{
+  blocks: ManuscriptBlock[];
+  paragraphs: string[];
+  chapterParagraphNums: Set<number>;
+  rawText: string;
+  blockCount: number;
+}> {
+  const { value: html } = await mammoth.convertToHtml(
+    { buffer },
+    { styleMap: MAMMOTH_STYLE_MAP }
+  );
+  let blocks = extractBlocksFromHtml(html);
 
-  return { paragraphs, rawText, blockCount: paragraphs.length };
+  const { value: rawText } = await mammoth.extractRawText({ buffer });
+  const rawBlocks = blocksFromRawText(rawText);
+
+  // Prefer HTML structure when it captures enough content; else raw lines
+  if (blocks.length < Math.max(1, rawBlocks.length * 0.85)) {
+    blocks = rawBlocks;
+  }
+
+  const chapterParagraphNums = new Set<number>();
+  blocks.forEach((block, i) => {
+    if (isLikelyChapterBlock(block)) {
+      chapterParagraphNums.add(i);
+    }
+  });
+
+  const paragraphs = blocks.map((b) => b.text);
+
+  return {
+    blocks,
+    paragraphs,
+    chapterParagraphNums,
+    rawText,
+    blockCount: paragraphs.length,
+  };
+}
+
+/** @deprecated Use extractManuscriptBlocks — kept for callers that only need strings. */
+export async function extractManuscriptParagraphs(
+  buffer: Buffer
+): Promise<{ paragraphs: string[]; rawText: string; blockCount: number }> {
+  const { paragraphs, rawText, blockCount } = await extractManuscriptBlocks(buffer);
+  return { paragraphs, rawText, blockCount };
 }
 
 /** Compare source paragraphs to emitted lines — flags dropped wording. */

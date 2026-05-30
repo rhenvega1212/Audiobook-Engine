@@ -2,7 +2,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createEngineCharacter } from "@/lib/engine/types";
 import { processManuscriptFromParagraphs } from "@/lib/engine/rules-engine";
 import {
-  extractManuscriptParagraphs,
+  extractManuscriptBlocks,
   measureManuscriptCoverage,
 } from "@/lib/engine/manuscript-extract";
 import { isValidNewCharacter } from "@/lib/engine/unknown-speaker";
@@ -71,7 +71,8 @@ async function runAnalysis(
   }
 
   const buffer = Buffer.from(await fileData.arrayBuffer());
-  const { paragraphs, blockCount } = await extractManuscriptParagraphs(buffer);
+  const { paragraphs, blockCount, chapterParagraphNums } =
+    await extractManuscriptBlocks(buffer);
   const result = processManuscriptFromParagraphs(paragraphs, roster);
 
   const coverage = measureManuscriptCoverage(paragraphs, result.lines);
@@ -187,7 +188,9 @@ async function runAnalysis(
 
   let chapterCount = 0;
   try {
-    chapterCount = await rebuildAutoBookChapters(admin, bookId);
+    chapterCount = await rebuildAutoBookChapters(admin, bookId, {
+      chapterParagraphNums,
+    });
   } catch (e) {
     console.warn("Chapter sync skipped:", e);
   }

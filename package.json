@@ -11,7 +11,7 @@
     "seed:voices": "npx tsx scripts/seed-voice-ids.ts",
     "test:workflow": "npx tsx scripts/workflow-test.ts --keep",
     "cleanup:characters": "npx tsx scripts/cleanup-junk-characters.ts",
-    "test:workflow": "npx tsx scripts/workflow-test.ts"
+    "reanalyze:book": "npx tsx scripts/reanalyze-book.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.98.0",

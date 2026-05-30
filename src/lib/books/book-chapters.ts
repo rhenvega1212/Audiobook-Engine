@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { CHAPTER_HEADING_RE } from "@/lib/engine/regex";
+import { CHAPTER_HEADING_RE, CHAPTER_NUMBER_RE } from "@/lib/engine/regex";
 import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
 import type { ManuscriptChapter } from "@/lib/manuscript/chapters";
 
@@ -17,11 +17,15 @@ type LineSlice = {
   id: string;
   line_order: number;
   line_text: string;
+  paragraph_num?: number;
 };
 
 export function isChapterHeadingText(text: string): boolean {
-  const t = text.trim();
-  return t.length > 0 && CHAPTER_HEADING_RE.test(t);
+  const t = text.trim().replace(/\u00a0/g, " ");
+  if (!t) return false;
+  if (CHAPTER_HEADING_RE.test(t)) return true;
+  if (CHAPTER_NUMBER_RE.test(t)) return true;
+  return false;
 }
 
 function chapterTitleFromLine(text: string): string {
@@ -31,13 +35,22 @@ function chapterTitleFromLine(text: string): string {
 
 /** Detect chapter start lines from manuscript text. */
 export function detectChapterStarts(
-  lines: LineSlice[]
+  lines: LineSlice[],
+  options?: { chapterParagraphNums?: Set<number> }
 ): { start_line_id: string; start_line_order: number; title: string }[] {
   const starts: { start_line_id: string; start_line_order: number; title: string }[] =
     [];
+  const seenOrders = new Set<number>();
 
   for (const line of lines) {
-    if (!isChapterHeadingText(line.line_text)) continue;
+    const fromText = isChapterHeadingText(line.line_text);
+    const fromBlock =
+      options?.chapterParagraphNums?.has(line.paragraph_num ?? -1) ?? false;
+
+    if (!fromText && !fromBlock) continue;
+    if (seenOrders.has(line.line_order)) continue;
+    seenOrders.add(line.line_order);
+
     starts.push({
       start_line_id: line.id,
       start_line_order: line.line_order,
@@ -46,10 +59,24 @@ export function detectChapterStarts(
   }
 
   if (starts.length === 0 && lines.length > 0) {
-    starts.push({
+    return [
+      {
+        start_line_id: lines[0]!.id,
+        start_line_order: lines[0]!.line_order,
+        title: "Full manuscript",
+      },
+    ];
+  }
+
+  // Lines before the first numbered chapter (prologue, front matter, etc.)
+  if (
+    starts.length > 0 &&
+    starts[0]!.start_line_order > (lines[0]?.line_order ?? 0)
+  ) {
+    starts.unshift({
       start_line_id: lines[0]!.id,
       start_line_order: lines[0]!.line_order,
-      title: "Full manuscript",
+      title: "Front matter",
     });
   }
 
@@ -95,17 +122,18 @@ export function chaptersFromRecords(
 
 export async function rebuildAutoBookChapters(
   admin: SupabaseClient,
-  bookId: string
+  bookId: string,
+  options?: { chapterParagraphNums?: Set<number> }
 ): Promise<number> {
   const lines = await fetchAllTaggedLines<LineSlice>(
     admin,
     bookId,
-    "id, line_order, line_text"
+    "id, line_order, line_text, paragraph_num"
   );
 
   await admin.from("book_chapters").delete().eq("book_id", bookId);
 
-  const starts = detectChapterStarts(lines);
+  const starts = detectChapterStarts(lines, options);
   if (starts.length === 0) return 0;
 
   const rows = starts.map((s, i) => ({

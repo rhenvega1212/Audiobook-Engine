@@ -1,5 +1,5 @@
 import type { EngineCharacter, ProcessResult, TaggedLine } from "./types";
-import { NAME_RE, DIALOGUE_TAG_START_RE, CHAPTER_HEADING_RE } from "./regex";
+import { NAME_RE, DIALOGUE_TAG_START_RE, CHAPTER_HEADING_RE, CHAPTER_NUMBER_RE } from "./regex";
 import {
   DIALOGUE_VERBS,
   ACTION_TAG_VERBS,
@@ -260,7 +260,11 @@ export function processManuscriptFromParagraphs(
   for (let i = 0; i < paragraphs.length; i++) {
     const para = paragraphs[i]!;
 
-    if (CHAPTER_HEADING_RE.test(para) || SCENE_BREAK_RE.test(para)) {
+    if (
+      CHAPTER_HEADING_RE.test(para) ||
+      CHAPTER_NUMBER_RE.test(para) ||
+      SCENE_BREAK_RE.test(para)
+    ) {
       allLines.push({
         speaker: "Narrator",
         line: para,
