@@ -3,6 +3,11 @@ import { CHAPTER_HEADING_RE } from "./regex";
 
 export type TaggedLineForAi = TaggedLine & { ai_reviewed?: boolean };
 
+/** True when this line still needs a Claude attribution pass. */
+export function lineNeedsAiPass(line: TaggedLineForAi): boolean {
+  return !!line.flag_reason && !line.ai_reviewed;
+}
+
 export interface SceneChunk {
   scene_id: number;
   start_line: number;
@@ -240,7 +245,9 @@ export async function runAiAssistedPass(
       }
 
       for (const localIdx of flaggedIndices) {
-        processedLineIndices.add(scene.start_line + localIdx);
+        const globalIdx = scene.start_line + localIdx;
+        processedLineIndices.add(globalIdx);
+        taggedLines[globalIdx].ai_reviewed = true;
       }
 
       scenesProcessed++;
@@ -251,14 +258,7 @@ export async function runAiAssistedPass(
     }
   }
 
-  const has_more = scenes.some((s) => {
-    for (let i = s.start_line; i < s.end_line; i++) {
-      if (taggedLines[i].flag_reason && !processedLineIndices.has(i)) {
-        return true;
-      }
-    }
-    return false;
-  });
+  const has_more = taggedLines.some(lineNeedsAiPass);
 
   return {
     lines: taggedLines,

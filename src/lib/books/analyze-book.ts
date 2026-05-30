@@ -223,7 +223,10 @@ async function runAnalysis(
         scenesProcessed += batch.scenes_processed;
         errors.push(...(batch.errors ?? []));
         hasMore = batch.has_more ?? false;
-        if (hasMore && batch.scenes_processed === 0) break;
+        if (hasMore && batch.scenes_processed === 0) {
+          hasMore = (batch.pending_ai ?? 0) > 0;
+          if (!hasMore) break;
+        }
       }
 
       aiReview = {
@@ -234,7 +237,9 @@ async function runAnalysis(
         scenes_total: lastBatch?.scenes_total ?? 0,
         api_calls: lastBatch?.api_calls ?? 0,
         has_more: false,
-        pending_flagged: 0,
+        pending_flagged: lastBatch?.pending_human_review ?? 0,
+        pending_ai: lastBatch?.pending_ai ?? 0,
+        pending_human_review: lastBatch?.pending_human_review ?? 0,
         errors,
       };
       status = aiReview.status;

@@ -170,8 +170,11 @@ export function BookDetailClient({
       setAiReviewProgress(100);
       setAiReviewMessage("AI review complete");
 
+      const humanLeft = result.pending_human_review ?? 0;
       toast.success(
-        `AI updated ${result.lines_updated} lines, cleared ${result.lines_cleared ?? 0} flags`
+        humanLeft > 0
+          ? `AI updated ${result.lines_updated} lines, cleared ${result.lines_cleared ?? 0} flags — ${humanLeft} still need your review`
+          : `AI updated ${result.lines_updated} lines, cleared ${result.lines_cleared ?? 0} flags`
       );
       router.refresh();
     } catch (e) {

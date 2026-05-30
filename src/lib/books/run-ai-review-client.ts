@@ -2,8 +2,32 @@ export type BatchAiReviewProgress = {
   message: string;
   progress: number;
   batch: number;
+  /** Flagged lines still needing human review (may include ai_confirmed). */
   pending: number;
+  /** Lines not yet processed by AI this run. */
+  pendingAi?: number;
 };
+
+function formatBatchMessage(
+  batch: number,
+  scenes: number,
+  pendingAi: number,
+  pendingHuman: number,
+  hasMore: boolean
+): string {
+  if (!hasMore) {
+    if (pendingHuman > 0) {
+      return `AI finished — ${pendingHuman.toLocaleString()} line${pendingHuman === 1 ? "" : "s"} still flagged for your review`;
+    }
+    return "AI review complete — no flagged lines remaining";
+  }
+  if (scenes === 0 && pendingAi === 0 && pendingHuman > 0) {
+    return `AI finished — ${pendingHuman.toLocaleString()} line${pendingHuman === 1 ? "" : "s"} need human review (Accept AI or confirm in Review)`;
+  }
+  const aiPart =
+    pendingAi > 0 ? `, ${pendingAi.toLocaleString()} awaiting AI` : "";
+  return `Batch ${batch}: reviewed ${scenes} scene${scenes === 1 ? "" : "s"} — ${pendingHuman.toLocaleString()} flagged for review${aiPart}…`;
+}
 
 export async function runBatchAiReview(
   bookId: string,
@@ -13,6 +37,7 @@ export async function runBatchAiReview(
   lines_updated: number;
   lines_cleared: number;
   errors: string[];
+  pending_human_review: number;
 }> {
   let hasMore = true;
   let linesUpdated = 0;
@@ -20,6 +45,7 @@ export async function runBatchAiReview(
   const allErrors: string[] = [];
   let batch = 0;
   let startPending = initialFlagged ?? 0;
+  let lastPendingHuman = startPending;
 
   onProgress?.({
     message: "Connecting to Claude…",
@@ -58,46 +84,81 @@ export async function runBatchAiReview(
     hasMore = (data as { has_more?: boolean }).has_more ?? false;
 
     const scenes = (data as { scenes_processed?: number }).scenes_processed ?? 0;
-    const pending = (data as { pending_flagged?: number }).pending_flagged ?? 0;
+    const pendingAi =
+      (data as { pending_ai?: number }).pending_ai ??
+      (hasMore ? 1 : 0);
+    const pendingHuman =
+      (data as { pending_human_review?: number }).pending_human_review ??
+      (data as { pending_flagged?: number }).pending_flagged ??
+      0;
+    lastPendingHuman = pendingHuman;
     const errs = (data as { errors?: string[] }).errors ?? [];
     allErrors.push(...errs);
 
-    if (batch === 1 && startPending === 0 && pending > 0) {
-      startPending = pending + linesCleared;
+    if (batch === 1 && startPending === 0 && pendingHuman > 0) {
+      startPending = pendingHuman;
+    }
+
+    // No scenes ran but API says more work — avoid infinite loop (stale has_more guard)
+    if (hasMore && scenes === 0) {
+      if (errs.length > 0) {
+        const first = errs[0] ?? "AI review stalled";
+        throw new Error(
+          first.includes("not_found_error") && first.includes("model:")
+            ? "Claude model not found — set ANTHROPIC_MODEL=claude-sonnet-4-6 in .env.local and restart the dev server"
+            : first
+        );
+      }
+      hasMore = pendingAi > 0;
+      if (!hasMore) {
+        break;
+      }
     }
 
     let progress: number;
     if (startPending > 0) {
-      const reviewed = Math.max(0, startPending - pending);
+      const clearedForHuman = Math.max(0, startPending - pendingHuman);
       progress = hasMore
-        ? Math.min(95, Math.round((reviewed / startPending) * 100))
+        ? Math.min(95, Math.round((clearedForHuman / startPending) * 100))
         : 100;
     } else {
-      progress = hasMore ? Math.min(90, batch * 10) : 100;
+      progress = hasMore ? Math.min(95, Math.min(batch * 8, 90)) : 100;
     }
 
-    const message = hasMore
-      ? `Batch ${batch}: reviewed ${scenes} scene${scenes === 1 ? "" : "s"}, ${pending.toLocaleString()} flagged remaining…`
-      : `Finished — cleared ${linesCleared.toLocaleString()} flag${linesCleared === 1 ? "" : "s"}`;
+    const message = formatBatchMessage(
+      batch,
+      scenes,
+      pendingAi,
+      pendingHuman,
+      hasMore
+    );
 
-    onProgress?.({ message, progress, batch, pending });
-
-    if (hasMore && scenes === 0 && errs.length > 0) {
-      const first = errs[0] ?? "AI review stalled";
-      throw new Error(
-        first.includes("not_found_error") && first.includes("model:")
-          ? "Claude model not found — set ANTHROPIC_MODEL=claude-sonnet-4-6 in .env.local and restart the dev server"
-          : first
-      );
-    }
+    onProgress?.({
+      message,
+      progress,
+      batch,
+      pending: pendingHuman,
+      pendingAi,
+    });
   }
 
+  const doneMessage =
+    lastPendingHuman > 0
+      ? `AI complete — ${lastPendingHuman.toLocaleString()} line${lastPendingHuman === 1 ? "" : "s"} for human review`
+      : "AI review complete";
+
   onProgress?.({
-    message: "AI review complete",
+    message: doneMessage,
     progress: 100,
     batch,
-    pending: 0,
+    pending: lastPendingHuman,
+    pendingAi: 0,
   });
 
-  return { lines_updated: linesUpdated, lines_cleared: linesCleared, errors: allErrors };
+  return {
+    lines_updated: linesUpdated,
+    lines_cleared: linesCleared,
+    errors: allErrors,
+    pending_human_review: lastPendingHuman,
+  };
 }

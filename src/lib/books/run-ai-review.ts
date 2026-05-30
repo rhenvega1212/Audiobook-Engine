@@ -158,6 +158,23 @@ export async function runAiReviewForBook(
 
   const status = await updateBookStatus(admin, bookId);
 
+  const [{ count: pendingAi }, { count: pendingHuman }] = await Promise.all([
+    admin
+      .from("tagged_lines")
+      .select("*", { count: "exact", head: true })
+      .eq("book_id", bookId)
+      .not("flag_reason", "is", null)
+      .eq("ai_reviewed", false),
+    admin
+      .from("tagged_lines")
+      .select("*", { count: "exact", head: true })
+      .eq("book_id", bookId)
+      .not("flag_reason", "is", null),
+  ]);
+
+  const needsAi = pendingAi ?? 0;
+  const needsHuman = pendingHuman ?? 0;
+
   return {
     scenes_total: result.scenes_total,
     scenes_processed: result.scenes_processed,
@@ -165,10 +182,10 @@ export async function runAiReviewForBook(
     api_calls: result.api_calls,
     lines_cleared: linesCleared,
     status,
-    has_more: result.has_more,
-    pending_flagged: dbLines.filter(
-      (l, i) => l.flag_reason && !processedSet.has(i)
-    ).length,
+    has_more: needsAi > 0,
+    pending_flagged: needsHuman,
+    pending_ai: needsAi,
+    pending_human_review: needsHuman,
     errors: result.errors,
   };
 }

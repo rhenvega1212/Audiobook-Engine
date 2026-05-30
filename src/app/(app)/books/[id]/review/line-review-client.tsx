@@ -169,8 +169,11 @@ export function LineReviewClient({
       setAiReviewProgress(100);
       setAiReviewMessage("AI review complete");
       router.refresh();
+      const humanLeft = result.pending_human_review ?? 0;
       toast.success(
-        `AI review complete — updated ${result.lines_updated} lines, cleared ${result.lines_cleared} flags`
+        humanLeft > 0
+          ? `AI review complete — cleared ${result.lines_cleared} flags, ${humanLeft} line${humanLeft === 1 ? "" : "s"} still need your review`
+          : `AI review complete — updated ${result.lines_updated} lines, cleared ${result.lines_cleared} flags`
       );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "AI suggestion failed");
