@@ -102,6 +102,40 @@ export function isSplitInsideQuote(text: string, start: number, end: number): bo
   return false;
 }
 
+export function isWrappedInQuotes(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 2) return false;
+  const first = t[0] as QuoteChar;
+  const last = t[t.length - 1]!;
+  return OPENERS.has(first) && matchesCloser(first, last);
+}
+
+/** Remove one pair of outer quote marks (for TTS — voices should not read them). */
+export function stripOuterQuotes(text: string): string {
+  const t = text.trim();
+  if (!isWrappedInQuotes(t)) return text;
+  const inner = t.slice(1, -1).trim();
+  return inner || text;
+}
+
+/** Wrap spoken dialogue in quotes when missing (document view / paragraph rebuild). */
+export function wrapInQuotes(text: string, opener: QuoteChar = '"'): string {
+  const t = text.trim();
+  if (!t || isWrappedInQuotes(t)) return t;
+  const closer = CLOSERS.get(opener) ?? opener;
+  return `${opener}${t}${closer}`;
+}
+
+export function formatLineForManuscript(
+  text: string,
+  speakerLabel: string
+): string {
+  const isDialogue =
+    speakerLabel !== "Narrator" && speakerLabel !== "UNKNOWN";
+  if (!isDialogue) return text.trim();
+  return wrapInQuotes(text);
+}
+
 /** Split a paragraph into narration / dialogue segments at quote boundaries. */
 export function segmentParagraphByQuotes(text: string): TextSegment[] {
   const spans = findQuoteSpans(text);
@@ -127,12 +161,11 @@ export function segmentParagraphByQuotes(text: string): TextSegment[] {
       }
     }
 
-    const quoted = text.slice(span.start, span.end);
-    const inner = quoted.slice(1, -1).trim();
-    if (inner) {
+    const quoted = text.slice(span.start, span.end).trim();
+    if (quoted.length >= 2) {
       segments.push({
         kind: "dialogue",
-        text: inner,
+        text: quoted,
         start: span.start,
         end: span.end,
       });

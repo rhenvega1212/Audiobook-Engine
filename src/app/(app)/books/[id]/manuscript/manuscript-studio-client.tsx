@@ -659,6 +659,7 @@ export function ManuscriptStudioClient({
     const ch = findChapterForLine(chapters, n);
     if (ch && ch.id !== chapterFilter) {
       setChapterFilter(ch.id);
+      setScrollToIndex(0);
       setScrollKey((k) => k + 1);
     }
     const jumpBase = ch

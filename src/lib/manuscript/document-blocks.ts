@@ -1,6 +1,7 @@
 /** Group tagged lines into document paragraphs for cleanup / doc view. */
 
 import { isChapterHeadingText } from "@/lib/books/book-chapters";
+import { formatLineForManuscript } from "@/lib/engine/quote-spans";
 
 export type DocumentBlock = {
   id: string;
@@ -16,6 +17,7 @@ type LineSlice = {
   line_order: number;
   paragraph_num: number;
   line_text: string;
+  speaker_label?: string;
   excluded_from_export?: boolean;
 };
 
@@ -37,7 +39,13 @@ export function buildDocumentBlocks(lines: LineSlice[]): DocumentBlock[] {
   return paraNums.map((paraNum) => {
     const group = byPara.get(paraNum)!;
     const text = group
-      .map((l) => l.line_text.trim())
+      .map((l) => {
+        const trimmed = l.line_text.trim();
+        if (!trimmed) return "";
+        return l.speaker_label
+          ? formatLineForManuscript(trimmed, l.speaker_label)
+          : trimmed;
+      })
       .filter(Boolean)
       .join(" ");
     const excluded = group.every((l) => l.excluded_from_export);

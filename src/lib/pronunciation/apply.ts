@@ -1,3 +1,5 @@
+import { stripOuterQuotes } from "@/lib/engine/quote-spans";
+
 export type PronunciationEntry = {
   word: string;
   spoken_form: string;
@@ -67,5 +69,5 @@ export function resolveSpokenLine(
   dictionary: PronunciationEntry[]
 ): string {
   const base = spokenText?.trim() ? spokenText : lineText;
-  return applyPronunciations(base, dictionary);
+  return applyPronunciations(stripOuterQuotes(base), dictionary);
 }

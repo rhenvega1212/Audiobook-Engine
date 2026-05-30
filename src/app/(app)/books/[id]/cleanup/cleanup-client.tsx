@@ -157,6 +157,9 @@ export function CleanupClient({
   function handleChapterChange(chapterId: string) {
     setChapterFilter(chapterId);
     clearSelection();
+    requestAnimationFrame(() => {
+      docRef.current?.scrollTo({ top: 0, behavior: "auto" });
+    });
   }
 
   async function deleteSelected() {

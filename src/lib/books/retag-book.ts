@@ -61,11 +61,12 @@ async function runRetag(
     line_order: number;
     paragraph_num: number;
     line_text: string;
+    speaker_label: string;
     excluded_from_export?: boolean;
   }>(
     admin,
     bookId,
-    "id, line_order, paragraph_num, line_text, excluded_from_export"
+    "id, line_order, paragraph_num, line_text, speaker_label, excluded_from_export"
   );
 
   if (existingLines.length === 0) {

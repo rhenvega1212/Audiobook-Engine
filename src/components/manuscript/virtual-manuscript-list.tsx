@@ -69,13 +69,34 @@ export function VirtualManuscriptList<T extends { id: string }>({
   }, [items, rowHeight]);
 
   useLayoutEffect(() => {
-    if (useNativeScroll) return;
-    if (scrollToIndex == null || scrollToIndex < 0) return;
     const el = parentRef.current;
     if (!el) return;
+
+    if (scrollToIndex == null || scrollToIndex < 0) {
+      if (scrollKey != null) {
+        el.scrollTop = 0;
+        setScrollTop(0);
+      }
+      return;
+    }
+
+    if (useNativeScroll) {
+      if (scrollToIndex === 0) {
+        el.scrollTop = 0;
+        setScrollTop(0);
+      } else {
+        const child = el.children[scrollToIndex] as HTMLElement | undefined;
+        if (child) {
+          child.scrollIntoView({ block: "start", behavior: "auto" });
+          setScrollTop(el.scrollTop);
+        }
+      }
+      return;
+    }
+
     el.scrollTop = getOffset(scrollToIndex);
     setScrollTop(el.scrollTop);
-  }, [scrollToIndex, scrollKey, getOffset, useNativeScroll]);
+  }, [scrollToIndex, scrollKey, getOffset, useNativeScroll, items.length]);
 
   const onRowResize = useCallback((id: string, height: number) => {
     const prev = heightsRef.current.get(id);
