@@ -53,6 +53,7 @@ export default async function CleanupPage({
     id: string;
     line_order: number;
     paragraph_num: number;
+    speaker_label: string;
     line_text: string;
     excluded_from_export?: boolean;
   }[];
@@ -61,13 +62,13 @@ export default async function CleanupPage({
     dbLines = await fetchAllTaggedLines(
       supabase,
       id,
-      "id, line_order, paragraph_num, line_text, excluded_from_export"
+      "id, line_order, paragraph_num, speaker_label, line_text, excluded_from_export"
     );
   } catch {
     dbLines = await fetchAllTaggedLines(
       supabase,
       id,
-      "id, line_order, paragraph_num, line_text"
+      "id, line_order, paragraph_num, line_text, excluded_from_export"
     );
   }
 
@@ -75,7 +76,7 @@ export default async function CleanupPage({
     id: l.id,
     line_order: l.line_order,
     paragraph_num: l.paragraph_num,
-    speaker_label: "Narrator",
+    speaker_label: l.speaker_label ?? "Narrator",
     speaker_character_id: null,
     line_text: l.line_text,
     flag_reason: null,
