@@ -1012,14 +1012,17 @@ export function ManuscriptStudioClient({
         >
           ← {bookTitle}
         </Link>
-        <h1 className="font-serif text-h1 mt-3">Manuscript studio</h1>
+        <h1 className="font-serif text-h1 mt-3">Speaker studio</h1>
         <p className="mt-2 text-body-sm text-slate max-w-2xl">
-          Full book in reading order. <strong>Highlight text</strong> in a line
-          to split it and assign a speaker. Select multiple adjacent lines to{" "}
-          <strong>merge</strong> or <strong>delete</strong> (e.g. recipes, back
-          matter). Use <strong>Set chapter start</strong> on a line to build the
-          chapter list, or <strong>Rebuild from headings</strong> after import.
-          Shift-click to select a range.
+          Line-by-line speaker and voice editing. To remove recipes or back matter
+          in a document view, use{" "}
+          <Link
+            href={`/books/${bookId}/cleanup`}
+            className="text-burgundy underline underline-offset-2"
+          >
+            Manuscript cleanup
+          </Link>
+          . Highlight text to split lines; shift-click to select ranges.
         </p>
         <p className="mt-2 text-body-sm text-slate tabular-nums">
           {stats.total.toLocaleString()} lines ·{" "}

@@ -333,15 +333,19 @@ export function BookDetailClient({
         )}
         <div className="mt-4 flex flex-wrap gap-2">
           <Button asChild size="sm">
-            <Link href={`/books/${bookId}/manuscript`}>Manuscript studio</Link>
+            <Link href={`/books/${bookId}/cleanup`}>Manuscript cleanup</Link>
+          </Button>
+          <Button asChild variant="secondary" size="sm">
+            <Link href={`/books/${bookId}/manuscript`}>Speaker studio</Link>
           </Button>
           <Button
-            variant="secondary"
+            variant="outline"
             size="sm"
             onClick={rerunAnalysis}
             disabled={analyzing || aiReviewLoading}
+            title="Re-imports from the original Word file — undoes manual deletions"
           >
-            {analyzing ? "Analyzing…" : "Re-run analysis"}
+            {analyzing ? "Analyzing…" : "Re-import from Word"}
           </Button>
           {flaggedCount > 0 && (
             <Button
@@ -526,17 +530,18 @@ export function BookDetailClient({
         <div className="space-y-4">
           <Card className="border-teal/20">
             <CardHeader>
-              <CardTitle className="text-h3">Manuscript studio</CardTitle>
+              <CardTitle className="text-h3">Manuscript</CardTitle>
             </CardHeader>
-            <CardContent>
-              <p className="text-body-sm text-slate mb-4">
-                Read the full book in order, assign speakers and voices, preview
-                lines, and exclude sections (e.g. recipes) from export.
+            <CardContent className="space-y-2">
+              <p className="text-body-sm text-slate mb-2">
+                Clean up in document view, then assign speakers and voices in the
+                studio.
               </p>
               <Button asChild className="w-full">
-                <Link href={`/books/${bookId}/manuscript`}>
-                  Open full manuscript
-                </Link>
+                <Link href={`/books/${bookId}/cleanup`}>Cleanup (document view)</Link>
+              </Button>
+              <Button asChild variant="secondary" className="w-full">
+                <Link href={`/books/${bookId}/manuscript`}>Speaker studio</Link>
               </Button>
             </CardContent>
           </Card>

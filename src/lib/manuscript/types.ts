@@ -2,6 +2,7 @@
 export type ManuscriptLine = {
   id: string;
   line_order: number;
+  paragraph_num: number;
   speaker_label: string;
   speaker_character_id: string | null;
   line_text: string;

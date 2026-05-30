@@ -59,6 +59,7 @@ export default async function ManuscriptStudioPage({
   let dbLines: {
     id: string;
     line_order: number;
+    paragraph_num: number;
     speaker_label: string;
     line_text: string;
     flag_reason: string | null;
@@ -70,13 +71,13 @@ export default async function ManuscriptStudioPage({
     dbLines = await fetchAllTaggedLines(
       supabase,
       id,
-      "id, line_order, speaker_label, line_text, flag_reason, speaker_character_id, excluded_from_export"
+      "id, line_order, paragraph_num, speaker_label, line_text, flag_reason, speaker_character_id, excluded_from_export"
     );
   } catch {
     dbLines = await fetchAllTaggedLines(
       supabase,
       id,
-      "id, line_order, speaker_label, line_text, flag_reason, speaker_character_id"
+      "id, line_order, paragraph_num, speaker_label, line_text, flag_reason, speaker_character_id"
     );
   }
 
@@ -87,6 +88,7 @@ export default async function ManuscriptStudioPage({
     return {
       id: l.id,
       line_order: l.line_order,
+      paragraph_num: l.paragraph_num,
       speaker_label: l.speaker_label,
       speaker_character_id: l.speaker_character_id,
       line_text: l.line_text,
