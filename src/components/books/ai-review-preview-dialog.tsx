@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { ExternalLink, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -159,19 +160,24 @@ export function AiReviewPreviewDialog({
           )}
           {!loading &&
             proposals.map((p) => (
-              <label
+              <div
                 key={p.line_id}
-                className={`flex gap-3 p-3 cursor-pointer hover:bg-warm-sand/50 ${
+                className={`flex gap-3 p-3 hover:bg-warm-sand/50 ${
                   p.changed ? "" : "opacity-80"
                 }`}
               >
                 <input
+                  id={`ai-proposal-${p.line_id}`}
                   type="checkbox"
-                  className="mt-1 shrink-0"
+                  className="mt-1 shrink-0 cursor-pointer"
                   checked={selected.has(p.line_id)}
                   onChange={() => toggle(p.line_id)}
+                  aria-label={`Include line ${p.line_order + 1} in apply`}
                 />
-                <span className="text-body-sm break-words min-w-0">
+                <label
+                  htmlFor={`ai-proposal-${p.line_id}`}
+                  className="text-body-sm break-words min-w-0 flex-1 cursor-pointer"
+                >
                   <span className="text-slate">Line {p.line_order + 1}</span>
                   {p.changed ? (
                     <span className="block mt-0.5">
@@ -193,8 +199,25 @@ export function AiReviewPreviewDialog({
                   <span className="block mt-1 text-slate line-clamp-2">
                     {p.line_text}
                   </span>
-                </span>
-              </label>
+                </label>
+                <Button
+                  asChild
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 shrink-0 text-teal hover:text-teal/90 px-2"
+                >
+                  <Link
+                    href={`/books/${bookId}/manuscript?line=${encodeURIComponent(p.line_id)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Open this line in manuscript studio (new tab)"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5 mr-1 shrink-0" />
+                    <span className="hidden sm:inline">View in manuscript</span>
+                    <span className="sm:hidden">View</span>
+                  </Link>
+                </Button>
+              </div>
             ))}
         </div>
 
