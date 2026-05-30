@@ -54,6 +54,9 @@ export function buildAttributionTagsByLineId(
 
   const byPara = new Map<number, LineForAttributionTags[]>();
   for (const line of lines) {
+    if (line.paragraph_num == null || !Number.isFinite(line.paragraph_num)) {
+      continue;
+    }
     const bucket = byPara.get(line.paragraph_num) ?? [];
     bucket.push(line);
     byPara.set(line.paragraph_num, bucket);

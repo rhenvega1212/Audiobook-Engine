@@ -28,10 +28,6 @@ import { ManuscriptLineRow } from "@/components/manuscript/manuscript-line-row";
 import type { ManuscriptLine } from "@/lib/manuscript/types";
 import { ManuscriptCompactBlockRow } from "@/components/manuscript/manuscript-compact-block-row";
 import {
-  buildAttributionTagsByLineId,
-  findMissingSpeechTagInserts,
-} from "@/lib/manuscript/attribution-tags";
-import {
   groupConsecutiveSpeakerBlocks,
   type SpeakerBlock,
 } from "@/lib/manuscript/group-lines";
@@ -100,7 +96,8 @@ export function ManuscriptStudioClient({
   initialSpeaker,
   initialFlaggedOnly = false,
   initialBookChapters = [],
-  sourceParagraphs,
+  speechTagsByLineId = {},
+  initialMissingSpeechTagCount = 0,
 }: {
   bookId: string;
   bookTitle: string;
@@ -111,7 +108,8 @@ export function ManuscriptStudioClient({
   initialSpeaker?: string;
   initialFlaggedOnly?: boolean;
   initialBookChapters?: BookChapterRow[];
-  sourceParagraphs?: string[];
+  speechTagsByLineId?: Record<string, string>;
+  initialMissingSpeechTagCount?: number;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -198,6 +196,9 @@ export function ManuscriptStudioClient({
   const [chapterSaving, setChapterSaving] = useState(false);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [repairTagsBusy, setRepairTagsBusy] = useState(false);
+  const [missingSpeechTagCount, setMissingSpeechTagCount] = useState(
+    initialMissingSpeechTagCount
+  );
   const jumpInputRef = useRef<HTMLInputElement>(null);
   const lastSelectedIndexRef = useRef<number | null>(null);
 
@@ -205,20 +206,14 @@ export function ManuscriptStudioClient({
     setBookChapters(initialBookChapters);
   }, [initialBookChapters]);
 
+  useEffect(() => {
+    setMissingSpeechTagCount(initialMissingSpeechTagCount);
+  }, [initialMissingSpeechTagCount]);
+
   const speakers = useMemo(
     () => [...new Set(lines.map((l) => l.speaker_label))].sort(),
     [lines]
   );
-
-  const attributionTags = useMemo(
-    () => buildAttributionTagsByLineId(lines, sourceParagraphs),
-    [lines, sourceParagraphs]
-  );
-
-  const missingSpeechTagCount = useMemo(() => {
-    if (!sourceParagraphs?.length) return 0;
-    return findMissingSpeechTagInserts(lines, sourceParagraphs).length;
-  }, [lines, sourceParagraphs]);
 
   const chapters = useMemo(() => {
     if (bookChapters.length > 0) {
@@ -677,6 +672,7 @@ export function ManuscriptStudioClient({
         toast.success(
           `Inserted ${inserted.toLocaleString()} speech tag${inserted === 1 ? "" : "s"} from your Word file`
         );
+        setMissingSpeechTagCount(Math.max(0, missingSpeechTagCount - inserted));
         startTransition(() => router.refresh());
       } else {
         toast.message("All speech tags from Word are already in the manuscript");
@@ -1296,7 +1292,7 @@ export function ManuscriptStudioClient({
               onCastVoice={handleCastVoice}
               isChapterStart={chapterStartOrders.has(line.line_order)}
               selectionEnabled={!compactView}
-              speechTagAfter={attributionTags.get(line.id) ?? null}
+              speechTagAfter={speechTagsByLineId[line.id] ?? null}
               onTextSelected={(payload) => {
                 if (compactView) {
                   toast.message(

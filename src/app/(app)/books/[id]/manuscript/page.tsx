@@ -10,6 +10,10 @@ import type { Character } from "@/lib/types/database";
 import { ManuscriptStudioClient } from "./manuscript-studio-client";
 import type { ManuscriptLine } from "@/lib/manuscript/types";
 import type { BookChapterRow } from "@/lib/books/book-chapters";
+import {
+  buildAttributionTagsByLineId,
+  findMissingSpeechTagInserts,
+} from "@/lib/manuscript/attribution-tags";
 
 export const dynamic = "force-dynamic";
 
@@ -113,9 +117,29 @@ export default async function ManuscriptStudioPage({
   });
 
   let sourceParagraphs: string[] | undefined;
+  let speechTagsByLineId: Record<string, string> = {};
+  let missingSpeechTagCount = 0;
   try {
     const admin = createAdminClient();
     sourceParagraphs = (await fetchSourceParagraphs(admin, id)) ?? undefined;
+    if (sourceParagraphs?.length) {
+      const tagLines = lines.map((l) => ({
+        id: l.id,
+        line_order: l.line_order,
+        paragraph_num: l.paragraph_num,
+        line_text: l.line_text,
+      }));
+      for (const [lineId, tag] of buildAttributionTagsByLineId(
+        tagLines,
+        sourceParagraphs
+      )) {
+        speechTagsByLineId[lineId] = tag;
+      }
+      missingSpeechTagCount = findMissingSpeechTagInserts(
+        tagLines,
+        sourceParagraphs
+      ).length;
+    }
   } catch (e) {
     console.warn("Source paragraph load skipped:", e);
   }
@@ -131,7 +155,8 @@ export default async function ManuscriptStudioPage({
       initialSpeaker={initialSpeaker}
       initialFlaggedOnly={flagged === "1"}
       initialBookChapters={(syncedChapters ?? []) as BookChapterRow[]}
-      sourceParagraphs={sourceParagraphs}
+      speechTagsByLineId={speechTagsByLineId}
+      initialMissingSpeechTagCount={missingSpeechTagCount}
     />
   );
 }
