@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
 import { resyncBookChapterPositions } from "@/lib/books/book-chapters";
+import { fetchSourceParagraphs } from "@/lib/books/manuscript-source";
 import { notFound } from "next/navigation";
 import { displayBookTitle } from "@/lib/books/display-title";
 import { findCharacterBySpeaker } from "@/lib/characters/resolve-character";
@@ -111,6 +112,14 @@ export default async function ManuscriptStudioPage({
     };
   });
 
+  let sourceParagraphs: string[] | undefined;
+  try {
+    const admin = createAdminClient();
+    sourceParagraphs = (await fetchSourceParagraphs(admin, id)) ?? undefined;
+  } catch (e) {
+    console.warn("Source paragraph load skipped:", e);
+  }
+
   return (
     <ManuscriptStudioClient
       bookId={id}
@@ -122,6 +131,7 @@ export default async function ManuscriptStudioPage({
       initialSpeaker={initialSpeaker}
       initialFlaggedOnly={flagged === "1"}
       initialBookChapters={(syncedChapters ?? []) as BookChapterRow[]}
+      sourceParagraphs={sourceParagraphs}
     />
   );
 }

@@ -35,6 +35,13 @@ export function stripDialogueTag(narration: string): string {
   return remainder;
 }
 
+/** True when narration is only a speech tag (e.g. "Nikki said."). */
+export function isDialogueTagOnly(text: string): boolean {
+  const raw = text.trim();
+  if (!raw) return false;
+  return stripDialogueTag(raw).trim() === "";
+}
+
 function extractSpeakerFromAttribution(
   attributionText: string,
   roster: EngineCharacter[],
@@ -79,11 +86,30 @@ function emitNarration(
 ): void {
   const raw = text.trim();
   if (!raw) return;
-  const line = stripTags ? stripDialogueTag(raw) : raw;
-  if (!line.trim()) return;
+  if (stripTags) {
+    const remainder = stripDialogueTag(raw);
+    if (!remainder.trim()) {
+      results.push({
+        speaker: "Narrator",
+        line: raw,
+        paragraph_num: paraNum,
+        confidence: "high",
+        flag_reason: null,
+      });
+      return;
+    }
+    results.push({
+      speaker: "Narrator",
+      line: remainder.trim(),
+      paragraph_num: paraNum,
+      confidence: "high",
+      flag_reason: null,
+    });
+    return;
+  }
   results.push({
     speaker: "Narrator",
-    line: line.trim(),
+    line: raw,
     paragraph_num: paraNum,
     confidence: "high",
     flag_reason: null,

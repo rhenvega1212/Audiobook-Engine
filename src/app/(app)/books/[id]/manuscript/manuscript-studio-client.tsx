@@ -28,6 +28,10 @@ import { ManuscriptLineRow } from "@/components/manuscript/manuscript-line-row";
 import type { ManuscriptLine } from "@/lib/manuscript/types";
 import { ManuscriptCompactBlockRow } from "@/components/manuscript/manuscript-compact-block-row";
 import {
+  buildAttributionTagsByLineId,
+  findMissingSpeechTagInserts,
+} from "@/lib/manuscript/attribution-tags";
+import {
   groupConsecutiveSpeakerBlocks,
   type SpeakerBlock,
 } from "@/lib/manuscript/group-lines";
@@ -96,6 +100,7 @@ export function ManuscriptStudioClient({
   initialSpeaker,
   initialFlaggedOnly = false,
   initialBookChapters = [],
+  sourceParagraphs,
 }: {
   bookId: string;
   bookTitle: string;
@@ -106,6 +111,7 @@ export function ManuscriptStudioClient({
   initialSpeaker?: string;
   initialFlaggedOnly?: boolean;
   initialBookChapters?: BookChapterRow[];
+  sourceParagraphs?: string[];
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -191,6 +197,7 @@ export function ManuscriptStudioClient({
   const [chapterTitle, setChapterTitle] = useState("");
   const [chapterSaving, setChapterSaving] = useState(false);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
+  const [repairTagsBusy, setRepairTagsBusy] = useState(false);
   const jumpInputRef = useRef<HTMLInputElement>(null);
   const lastSelectedIndexRef = useRef<number | null>(null);
 
@@ -202,6 +209,16 @@ export function ManuscriptStudioClient({
     () => [...new Set(lines.map((l) => l.speaker_label))].sort(),
     [lines]
   );
+
+  const attributionTags = useMemo(
+    () => buildAttributionTagsByLineId(lines, sourceParagraphs),
+    [lines, sourceParagraphs]
+  );
+
+  const missingSpeechTagCount = useMemo(() => {
+    if (!sourceParagraphs?.length) return 0;
+    return findMissingSpeechTagInserts(lines, sourceParagraphs).length;
+  }, [lines, sourceParagraphs]);
 
   const chapters = useMemo(() => {
     if (bookChapters.length > 0) {
@@ -642,6 +659,32 @@ export function ManuscriptStudioClient({
       toast.error(e instanceof Error ? e.message : "Rebuild failed");
     } finally {
       setChapterSaving(false);
+    }
+  }
+
+  async function repairSpeechTags() {
+    setRepairTagsBusy(true);
+    try {
+      const res = await fetch(`/api/books/${bookId}/repair-speech-tags`, {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error ?? "Repair failed");
+      }
+      const inserted = (data as { inserted?: number }).inserted ?? 0;
+      if (inserted > 0) {
+        toast.success(
+          `Inserted ${inserted.toLocaleString()} speech tag${inserted === 1 ? "" : "s"} from your Word file`
+        );
+        startTransition(() => router.refresh());
+      } else {
+        toast.message("All speech tags from Word are already in the manuscript");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Repair failed");
+    } finally {
+      setRepairTagsBusy(false);
     }
   }
 
@@ -1151,6 +1194,19 @@ export function ManuscriptStudioClient({
           <Button asChild variant="outline" size="sm">
             <Link href={`/books/${bookId}/listen`}>Listen mode</Link>
           </Button>
+          {missingSpeechTagCount > 0 && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={repairTagsBusy}
+              onClick={() => void repairSpeechTags()}
+            >
+              {repairTagsBusy
+                ? "Restoring tags…"
+                : `Insert ${missingSpeechTagCount.toLocaleString()} missing speech tag${missingSpeechTagCount === 1 ? "" : "s"}`}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -1240,6 +1296,7 @@ export function ManuscriptStudioClient({
               onCastVoice={handleCastVoice}
               isChapterStart={chapterStartOrders.has(line.line_order)}
               selectionEnabled={!compactView}
+              speechTagAfter={attributionTags.get(line.id) ?? null}
               onTextSelected={(payload) => {
                 if (compactView) {
                   toast.message(

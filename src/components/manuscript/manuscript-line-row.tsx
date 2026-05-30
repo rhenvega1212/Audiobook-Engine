@@ -34,6 +34,7 @@ export function ManuscriptLineRow({
   onTextSelected,
   selectionEnabled = false,
   isChapterStart = false,
+  speechTagAfter,
 }: {
   bookId: string;
   line: ManuscriptLine;
@@ -57,6 +58,8 @@ export function ManuscriptLineRow({
   onTextSelected?: (payload: TextSelectionPayload) => void;
   selectionEnabled?: boolean;
   isChapterStart?: boolean;
+  /** Speech tag from Word source when not stored as its own line (e.g. "Nikki said."). */
+  speechTagAfter?: string | null;
 }) {
   const textRef = useRef<HTMLParagraphElement>(null);
   const speakerValue = resolveSpeakerIdFromLine(
@@ -224,6 +227,11 @@ export function ManuscriptLineRow({
       >
         {line.line_text}
       </p>
+      {speechTagAfter && (
+        <p className="font-serif text-sm text-slate italic pl-6 -mt-0.5 mb-0.5">
+          {speechTagAfter}
+        </p>
+      )}
 
       {isFlagged && line.flag_reason && (
         <p className="mt-1 pl-6 text-[10px] text-slate italic">{line.flag_reason}</p>
