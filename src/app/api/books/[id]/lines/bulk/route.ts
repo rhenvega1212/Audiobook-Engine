@@ -24,6 +24,7 @@ export async function POST(
   const updates = {
     ...fields,
     ...(fields.flag_reason === null ? { human_reviewed: true } : {}),
+    ...(fields.speaker_label != null ? { human_reviewed: true } : {}),
   };
 
   const supabase = await createClient();

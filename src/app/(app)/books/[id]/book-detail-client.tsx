@@ -31,7 +31,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { BookStatusBadge, CastStatusBadge } from "@/lib/books/status-badge";
-import { runBatchAiReview } from "@/lib/books/run-ai-review-client";
+import { runBatchAiReviewPreview } from "@/lib/books/run-ai-review-client";
+import { AiReviewPreviewDialog } from "@/components/books/ai-review-preview-dialog";
+import type { AiReviewProposal } from "@/lib/books/ai-review-proposals";
+import type { BookChapterRow } from "@/lib/books/book-chapters";
 import { VoicePickerDialog } from "@/components/voice-picker-dialog";
 import { CharacterLinesDialog } from "@/components/books/character-lines-dialog";
 import type { BookStatus, Character } from "@/lib/types/database";
@@ -57,6 +60,7 @@ export function BookDetailClient({
   roster,
   lineCount,
   chapterCount,
+  bookChapters = [],
 }: {
   bookId: string;
   book: {
@@ -75,6 +79,7 @@ export function BookDetailClient({
   roster: Character[];
   lineCount: number;
   chapterCount: number;
+  bookChapters?: BookChapterRow[];
 }) {
   const router = useRouter();
   const [pickerChar, setPickerChar] = useState<Character | null>(null);
@@ -89,6 +94,15 @@ export function BookDetailClient({
   const [linesCharacter, setLinesCharacter] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [aiReviewOpen, setAiReviewOpen] = useState(false);
+  const [aiIncludeReviewed, setAiIncludeReviewed] = useState(false);
+  const [aiUndoAvailable, setAiUndoAvailable] = useState(false);
+  const [aiUndoOpen, setAiUndoOpen] = useState(false);
+  const [aiUndoBusy, setAiUndoBusy] = useState(false);
+  const [aiScope, setAiScope] = useState<string>("flagged");
+  const [aiPreviewOpen, setAiPreviewOpen] = useState(false);
+  const [aiPreviewLoading, setAiPreviewLoading] = useState(false);
+  const [aiProposals, setAiProposals] = useState<AiReviewProposal[]>([]);
 
   const displayTitle = displayBookTitle(book.title);
   const seriesVoiceAssignments = useMemo(
@@ -101,6 +115,21 @@ export function BookDetailClient({
       setAnalyzing(true);
     }
   }, [book.status]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`/api/books/${bookId}/ai-review`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled) {
+          setAiUndoAvailable(!!(data as { can_undo?: boolean }).can_undo);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId, aiReviewLoading]);
 
   useEffect(() => {
     if (!analyzing) {
@@ -167,36 +196,80 @@ export function BookDetailClient({
     }
   }
 
-  async function runAiReview() {
+  async function startAiReviewPreview() {
+    setAiReviewOpen(false);
+    setAiPreviewOpen(true);
+    setAiPreviewLoading(true);
+    setAiProposals([]);
     setAiReviewLoading(true);
     setAiReviewProgress(3);
-    setAiReviewMessage("Starting AI review…");
+    setAiReviewMessage("Reading scenes from Word file…");
+
+    const scope =
+      aiScope === "flagged"
+        ? ({ type: "flagged" } as const)
+        : ({ type: "chapter", chapterId: aiScope } as const);
 
     try {
-      const result = await runBatchAiReview(
+      const result = await runBatchAiReviewPreview(
         bookId,
         ({ message, progress }) => {
           setAiReviewMessage(message);
           setAiReviewProgress(progress);
         },
-        flaggedCount
+        {
+          scope,
+          chapters: bookChapters,
+          includeAiReviewed: aiIncludeReviewed,
+        }
       );
 
-      setAiReviewProgress(100);
-      setAiReviewMessage("AI review complete");
-
-      const humanLeft = result.pending_human_review ?? 0;
-      toast.success(
-        humanLeft > 0
-          ? `AI updated ${result.lines_updated} lines, cleared ${result.lines_cleared ?? 0} flags — ${humanLeft} still need your review`
-          : `AI updated ${result.lines_updated} lines, cleared ${result.lines_cleared ?? 0} flags`
-      );
-      router.refresh();
+      setAiProposals(result.proposals);
+      setAiPreviewLoading(false);
+      if (result.proposals.length === 0) {
+        toast.message("No speaker changes suggested for this scope");
+      }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "AI review failed");
-      router.refresh();
+      setAiPreviewOpen(false);
+      toast.error(e instanceof Error ? e.message : "AI preview failed");
     } finally {
       setAiReviewLoading(false);
+      setAiPreviewLoading(false);
+    }
+  }
+
+  function handleAiApplied(applied: number) {
+    setAiUndoAvailable(true);
+    toast.success(
+      applied > 0
+        ? `Applied ${applied} speaker update${applied === 1 ? "" : "s"}. Undo is available if needed.`
+        : "No changes applied"
+    );
+    router.refresh();
+  }
+
+  async function undoAiReview() {
+    setAiUndoBusy(true);
+    try {
+      const res = await fetch(`/api/books/${bookId}/ai-review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ undo: true }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error ?? "Undo failed");
+      }
+      toast.success(
+        `Restored speaker assignments from before the last AI review (${(data as { restored?: number }).restored?.toLocaleString() ?? "?"} lines)`
+      );
+      setAiUndoAvailable(false);
+      setAiUndoOpen(false);
+      router.refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Undo failed");
+    } finally {
+      setAiUndoBusy(false);
     }
   }
 
@@ -347,14 +420,28 @@ export function BookDetailClient({
           >
             {analyzing ? "Analyzing…" : "Re-import from Word"}
           </Button>
-          {flaggedCount > 0 && (
+          {lineCount > 0 && (
             <Button
               variant="secondary"
               size="sm"
-              onClick={runAiReview}
+              onClick={() => setAiReviewOpen(true)}
               disabled={analyzing || aiReviewLoading}
             >
-              {aiReviewLoading ? "Running AI review…" : "AI review flagged lines"}
+              {aiReviewLoading
+                ? "Running AI review…"
+                : flaggedCount > 0
+                  ? "Review speakers with AI"
+                  : "Re-review speakers with AI"}
+            </Button>
+          )}
+          {aiUndoAvailable && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setAiUndoOpen(true)}
+              disabled={analyzing || aiReviewLoading || aiUndoBusy}
+            >
+              Undo last AI review
             </Button>
           )}
         </div>
@@ -663,6 +750,122 @@ export function BookDetailClient({
               disabled={deleting}
             >
               {deleting ? "Deleting…" : "Delete project"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={aiReviewOpen} onOpenChange={setAiReviewOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Review speakers with AI?</DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-3 text-body-sm text-slate pt-1">
+                <p>
+                  Claude will read scenes from your <strong>original Word file</strong>{" "}
+                  (with quotation marks) and suggest speaker fixes for ambiguous lines.
+                </p>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>
+                    <strong>Does not</strong> re-import the manuscript or undo cleanup
+                    deletions
+                  </li>
+                  <li>
+                    <strong>Does not</strong> change lines you already confirmed in
+                    Review or Speaker studio
+                  </li>
+                  <li>
+                    You&apos;ll <strong>preview every change</strong> before anything is
+                    saved — uncheck wrong suggestions, then apply
+                  </li>
+                  <li>
+                    Snapshot saved on apply so you can <strong>Undo last AI review</strong>
+                  </li>
+                  <li>
+                    Only clears flags when Claude is <strong>highly</strong> confident
+                    — medium/low stays flagged for you
+                  </li>
+                </ul>
+                {flaggedCount > 0 && (
+                  <p>
+                    {flaggedCount.toLocaleString()} line
+                    {flaggedCount === 1 ? "" : "s"} currently flagged.
+                  </p>
+                )}
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-body-sm font-medium">Scope</label>
+              <Select value={aiScope} onValueChange={setAiScope}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Choose scope" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="flagged">
+                    Flagged lines only (whole book)
+                  </SelectItem>
+                  {bookChapters.map((ch) => (
+                    <SelectItem key={ch.id} value={ch.id}>
+                      {ch.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <label className="flex items-start gap-2 text-body-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={aiIncludeReviewed}
+                onChange={(e) => setAiIncludeReviewed(e.target.checked)}
+                className="mt-1 rounded"
+              />
+              <span>
+                Also re-check lines AI already reviewed (use if Claude got some
+                speakers wrong last time)
+              </span>
+            </label>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={() => setAiReviewOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={() => void startAiReviewPreview()}>
+              Preview changes
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <AiReviewPreviewDialog
+        bookId={bookId}
+        open={aiPreviewOpen}
+        proposals={aiProposals}
+        loading={aiPreviewLoading}
+        onOpenChange={setAiPreviewOpen}
+        onApplied={handleAiApplied}
+      />
+
+      <Dialog open={aiUndoOpen} onOpenChange={setAiUndoOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Undo last AI review?</DialogTitle>
+            <DialogDescription>
+              Restores speaker assignments to how they were immediately before the
+              last AI review run. Your manuscript text, deletions, and lines you
+              manually confirmed are not affected.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setAiUndoOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void undoAiReview()}
+              disabled={aiUndoBusy}
+            >
+              {aiUndoBusy ? "Restoring…" : "Restore speakers"}
             </Button>
           </div>
         </DialogContent>

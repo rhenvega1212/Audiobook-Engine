@@ -1,12 +1,37 @@
 import type { EngineCharacter, TaggedLine } from "./types";
 import { CHAPTER_HEADING_RE } from "./regex";
+import type { AiReviewProposal } from "@/lib/books/ai-review-proposals";
 
-export type TaggedLineForAi = TaggedLine & { ai_reviewed?: boolean };
+export type TaggedLineForAi = TaggedLine & { ai_reviewed?: boolean; human_reviewed?: boolean };
+
+export type AiPassOptions = {
+  /** Re-process lines Claude already reviewed (still skips human_reviewed). */
+  includeAiReviewed?: boolean;
+  /** Global indices Claude may change (scope filter). */
+  eligibleIndices?: Set<number>;
+  /** Lines already handled in this preview run (avoids duplicate batches). */
+  previewProcessed?: Set<number>;
+};
 
 /** True when this line still needs a Claude attribution pass. */
-export function lineNeedsAiPass(line: TaggedLineForAi): boolean {
+export function lineNeedsAiPass(
+  line: TaggedLineForAi,
+  globalIndex: number,
+  options?: AiPassOptions
+): boolean {
+  if (line.human_reviewed) return false;
+  if (options?.previewProcessed?.has(globalIndex)) return false;
+  if (options?.eligibleIndices && !options.eligibleIndices.has(globalIndex)) {
+    return false;
+  }
+  if (options?.includeAiReviewed && line.ai_reviewed) return true;
   return !!line.flag_reason && !line.ai_reviewed;
 }
+
+export type SceneLineContext = {
+  line: TaggedLineForAi;
+  paragraph_num: number;
+};
 
 export interface SceneChunk {
   scene_id: number;
@@ -17,7 +42,10 @@ export interface SceneChunk {
 
 const SCENE_BREAK_NARRATOR_RUN = 3;
 
-export function groupLinesIntoScenes(taggedLines: TaggedLineForAi[]): SceneChunk[] {
+export function groupLinesIntoScenes(
+  taggedLines: TaggedLineForAi[],
+  options?: AiPassOptions
+): SceneChunk[] {
   const scenes: SceneChunk[] = [];
   let sceneStart = 0;
   let consecutiveNarrator = 0;
@@ -43,7 +71,9 @@ export function groupLinesIntoScenes(taggedLines: TaggedLineForAi[]): SceneChunk
         scene_id: scenes.length,
         start_line: sceneStart,
         end_line: i,
-        has_flags: sceneLines.some((l) => l.flag_reason && !l.ai_reviewed),
+        has_flags: sceneLines.some((l, j) =>
+          lineNeedsAiPass(l, sceneStart + j, options)
+        ),
       });
       sceneStart = i;
     }
@@ -55,7 +85,9 @@ export function groupLinesIntoScenes(taggedLines: TaggedLineForAi[]): SceneChunk
       scene_id: scenes.length,
       start_line: sceneStart,
       end_line: taggedLines.length,
-      has_flags: sceneLines.some((l) => l.flag_reason && !l.ai_reviewed),
+      has_flags: sceneLines.some((l, j) =>
+        lineNeedsAiPass(l, sceneStart + j, options)
+      ),
     });
   }
 
@@ -63,9 +95,10 @@ export function groupLinesIntoScenes(taggedLines: TaggedLineForAi[]): SceneChunk
 }
 
 export function buildAttributionPrompt(
-  sceneLines: TaggedLineForAi[],
+  sceneLines: SceneLineContext[],
   roster: EngineCharacter[],
-  flaggedIndices: number[]
+  flaggedIndices: number[],
+  sourceParagraphs?: string[]
 ): string {
   const rosterText = roster
     .map((c) => {
@@ -75,11 +108,34 @@ export function buildAttributionPrompt(
     })
     .join("\n");
 
+  const paraNums = [
+    ...new Set(sceneLines.map((s) => s.paragraph_num)),
+  ].sort((a, b) => a - b);
+
+  let sourceBlock = "";
+  if (sourceParagraphs && paraNums.length > 0) {
+    const parts: string[] = [];
+    for (const pn of paraNums) {
+      const src = sourceParagraphs[pn]?.trim();
+      if (src) parts.push(`[paragraph ${pn}]\n${src}`);
+    }
+    if (parts.length > 0) {
+      sourceBlock = `SOURCE MANUSCRIPT (verbatim from Word — authoritative for quotes and dialogue):
+${parts.join("\n\n")}
+
+`;
+    }
+  }
+
   let sceneText = "";
   for (let i = 0; i < sceneLines.length; i++) {
-    const line = sceneLines[i];
+    const { line, paragraph_num } = sceneLines[i]!;
     const marker = flaggedIndices.includes(i) ? "  ⚠ NEEDS REVIEW" : "";
-    sceneText += `[${i}] [${line.speaker}] ${line.line}${marker}\n`;
+    const hasSource = !!sourceParagraphs?.[paragraph_num]?.trim();
+    const textNote = hasSource
+      ? `(paragraph ${paragraph_num} — see source above)`
+      : line.line;
+    sceneText += `[${i}] [${line.speaker}] ${textNote}${marker}\n`;
   }
 
   return `You are an expert at attributing dialogue to characters in a novel.
@@ -87,18 +143,19 @@ export function buildAttributionPrompt(
 CHARACTER ROSTER:
 ${rosterText}
 
-SCENE (with current attributions):
+${sourceBlock}CURRENT LINE ATTRIBUTIONS (rules engine — may be wrong):
 ${sceneText}
 
-Lines marked "⚠ NEEDS REVIEW" had ambiguous attribution from the rules engine.
-Review the FULL scene context and determine the correct speaker for each one.
+Lines marked "⚠ NEEDS REVIEW" need a corrected speaker. Use the SOURCE MANUSCRIPT for quote boundaries and conversational flow — not the rules-engine fragments.
 
 Important rules:
-- "Narrator" is correct for non-dialogue (descriptive text)
+- "Narrator" is correct for non-dialogue (descriptive prose, action beats)
+- Quoted speech must be assigned to a character, not Narrator
 - Use exact canonical names from the roster (e.g. "Nikki Sands" not "Nikki")
 - If you cannot determine the speaker with confidence, return "UNKNOWN"
 - Consider conversation flow: in a 2-person dialogue, speakers usually alternate
 - Watch for scene transitions where new characters arrive
+- Prefer "low" confidence over guessing when attribution is ambiguous — do not clear uncertainty with a wild guess
 
 Respond with ONLY valid JSON, no markdown or explanation:
 {
@@ -184,9 +241,15 @@ export async function runAiAssistedPass(
   taggedLines: TaggedLineForAi[],
   roster: EngineCharacter[],
   apiKey: string,
-  options?: { maxScenes?: number }
+  options?: { maxScenes?: number; previewOnly?: boolean } & AiPassOptions & {
+      paragraphNums?: number[];
+      sourceParagraphs?: string[];
+      lineIds?: string[];
+      lineOrders?: number[];
+    }
 ): Promise<{
   lines: TaggedLineForAi[];
+  proposals: AiReviewProposal[];
   scenes_total: number;
   scenes_processed: number;
   lines_updated: number;
@@ -195,13 +258,15 @@ export async function runAiAssistedPass(
   has_more: boolean;
   errors: string[];
 }> {
-  const scenes = groupLinesIntoScenes(taggedLines);
+  const scenes = groupLinesIntoScenes(taggedLines, options);
   let scenesProcessed = 0;
   let linesUpdated = 0;
   let apiCalls = 0;
   let scenesAttempted = 0;
   const processedLineIndices = new Set<number>();
+  const proposals: AiReviewProposal[] = [];
   const errors: string[] = [];
+  const previewOnly = options?.previewOnly === true;
 
   for (const scene of scenes) {
     if (!scene.has_flags) continue;
@@ -212,14 +277,27 @@ export async function runAiAssistedPass(
 
     scenesAttempted++;
 
-    const sceneLines = taggedLines.slice(scene.start_line, scene.end_line);
+    const sceneSlice = taggedLines.slice(scene.start_line, scene.end_line);
+    const sceneLines: SceneLineContext[] = sceneSlice.map((line, i) => ({
+      line,
+      paragraph_num:
+        options?.paragraphNums?.[scene.start_line + i] ?? line.paragraph_num,
+    }));
+
     const flaggedIndices = sceneLines
-      .map((l, i) => (l.flag_reason && !l.ai_reviewed ? i : -1))
+      .map((ctx, i) =>
+        lineNeedsAiPass(ctx.line, scene.start_line + i, options) ? i : -1
+      )
       .filter((i) => i >= 0);
 
     if (flaggedIndices.length === 0) continue;
 
-    const prompt = buildAttributionPrompt(sceneLines, roster, flaggedIndices);
+    const prompt = buildAttributionPrompt(
+      sceneLines,
+      roster,
+      flaggedIndices,
+      options?.sourceParagraphs
+    );
 
     try {
       const response = await callClaudeForAttribution(prompt, apiKey);
@@ -231,15 +309,35 @@ export async function runAiAssistedPass(
         if (globalIdx < 0 || globalIdx >= taggedLines.length) continue;
         if (!flaggedIndices.includes(localIdx)) continue;
 
-        const oldSpeaker = taggedLines[globalIdx].speaker;
+        const oldSpeaker = taggedLines[globalIdx]!.speaker;
         const newSpeaker = attr.speaker;
-        taggedLines[globalIdx].speaker = newSpeaker;
-        taggedLines[globalIdx].confidence =
+        const confidence =
           (attr.confidence as TaggedLine["confidence"]) ?? "medium";
-        taggedLines[globalIdx].flag_reason =
+
+        const lineId = options?.lineIds?.[globalIdx] ?? "";
+        const lineOrder =
+          options?.lineOrders?.[globalIdx] ?? taggedLines[globalIdx]!.paragraph_num;
+
+        proposals.push({
+          line_id: lineId,
+          global_index: globalIdx,
+          line_order: lineOrder,
+          old_speaker: oldSpeaker,
+          new_speaker: newSpeaker,
+          confidence,
+          line_text: taggedLines[globalIdx]!.line,
+          flag_reason: taggedLines[globalIdx]!.flag_reason ?? null,
+          changed: oldSpeaker !== newSpeaker,
+        });
+
+        if (previewOnly) continue;
+
+        taggedLines[globalIdx]!.speaker = newSpeaker;
+        taggedLines[globalIdx]!.confidence = confidence;
+        taggedLines[globalIdx]!.flag_reason =
           oldSpeaker !== newSpeaker
-            ? `ai_reviewed (was: ${taggedLines[globalIdx].flag_reason}; changed: ${oldSpeaker} → ${newSpeaker})`
-            : `ai_confirmed (was: ${taggedLines[globalIdx].flag_reason})`;
+            ? `ai_reviewed (was: ${taggedLines[globalIdx]!.flag_reason ?? "none"}; changed: ${oldSpeaker} → ${newSpeaker})`
+            : `ai_confirmed (was: ${taggedLines[globalIdx]!.flag_reason ?? "none"})`;
 
         if (oldSpeaker !== newSpeaker) linesUpdated++;
       }
@@ -247,7 +345,9 @@ export async function runAiAssistedPass(
       for (const localIdx of flaggedIndices) {
         const globalIdx = scene.start_line + localIdx;
         processedLineIndices.add(globalIdx);
-        taggedLines[globalIdx].ai_reviewed = true;
+        if (!previewOnly) {
+          taggedLines[globalIdx]!.ai_reviewed = true;
+        }
       }
 
       scenesProcessed++;
@@ -258,10 +358,11 @@ export async function runAiAssistedPass(
     }
   }
 
-  const has_more = taggedLines.some(lineNeedsAiPass);
+  const has_more = taggedLines.some((l, i) => lineNeedsAiPass(l, i, options));
 
   return {
     lines: taggedLines,
+    proposals,
     scenes_total: scenes.length,
     scenes_processed: scenesProcessed,
     lines_updated: linesUpdated,

@@ -3,6 +3,7 @@ import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
 import { BookDetailClient } from "./book-detail-client";
 import { notFound } from "next/navigation";
 import type { TaggedLine } from "@/lib/types/database";
+import type { BookChapterRow } from "@/lib/books/book-chapters";
 
 export const dynamic = "force-dynamic";
 
@@ -34,13 +35,26 @@ export default async function BookDetailPage({
 
   if (!book) notFound();
 
-  const [{ data: roster }, { data: bookChars }] = await Promise.all([
+  const [{ data: roster }, { data: bookChars }, chaptersResult] =
+    await Promise.all([
     supabase.from("characters").select("*").eq("series_id", book.series_id),
     supabase
       .from("book_characters")
       .select("*, characters(canonical_name)")
       .eq("book_id", id),
+    supabase
+      .from("book_chapters")
+      .select(
+        "id, book_id, sort_order, title, start_line_id, start_line_order, source"
+      )
+      .eq("book_id", id)
+      .order("start_line_order"),
   ]);
+
+  const bookChapters =
+    chaptersResult.error == null
+      ? ((chaptersResult.data ?? []) as BookChapterRow[])
+      : [];
 
   let lines: TaggedLine[] = [];
   try {
@@ -113,6 +127,7 @@ export default async function BookDetailPage({
       roster={roster ?? []}
       lineCount={lines.length}
       chapterCount={chapterCount ?? 0}
+      bookChapters={bookChapters}
     />
   );
 }

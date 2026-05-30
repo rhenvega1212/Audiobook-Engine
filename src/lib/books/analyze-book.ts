@@ -261,6 +261,9 @@ async function runAnalysis(
         pending_flagged: lastBatch?.pending_human_review ?? 0,
         pending_ai: lastBatch?.pending_ai ?? 0,
         pending_human_review: lastBatch?.pending_human_review ?? 0,
+        lines_skipped_human: lastBatch?.lines_skipped_human ?? 0,
+        snapshot_id: lastBatch?.snapshot_id ?? null,
+        used_source_paragraphs: lastBatch?.used_source_paragraphs ?? false,
         errors,
       };
       status = aiReview.status;

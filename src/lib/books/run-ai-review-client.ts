@@ -1,38 +1,103 @@
+import type { AiReviewProposal } from "@/lib/books/ai-review-proposals";
+import type { AiReviewScope } from "@/lib/books/ai-review-scope";
+import type { BookChapterRow } from "@/lib/books/book-chapters";
+
 export type BatchAiReviewProgress = {
   message: string;
   progress: number;
   batch: number;
-  /** Flagged lines still needing human review (may include ai_confirmed). */
   pending: number;
-  /** Lines not yet processed by AI this run. */
   pendingAi?: number;
 };
 
-function formatBatchMessage(
-  batch: number,
-  scenes: number,
-  pendingAi: number,
-  pendingHuman: number,
-  hasMore: boolean
-): string {
-  if (!hasMore) {
-    if (pendingHuman > 0) {
-      return `AI finished — ${pendingHuman.toLocaleString()} line${pendingHuman === 1 ? "" : "s"} still flagged for your review`;
-    }
-    return "AI review complete — no flagged lines remaining";
+export type AiReviewPreviewOptions = {
+  scope?: AiReviewScope;
+  chapters?: BookChapterRow[];
+  includeAiReviewed?: boolean;
+};
+
+/** Run Claude in preview mode (no DB writes) for the full scope in one request. */
+export async function runBatchAiReviewPreview(
+  bookId: string,
+  onProgress?: (update: BatchAiReviewProgress) => void,
+  options?: AiReviewPreviewOptions
+): Promise<{
+  proposals: AiReviewProposal[];
+  errors: string[];
+  api_calls: number;
+}> {
+  onProgress?.({
+    message: "Connecting to Claude…",
+    progress: 5,
+    batch: 1,
+    pending: 0,
+  });
+
+  onProgress?.({
+    message: "Reading scenes from your Word file…",
+    progress: 15,
+    batch: 1,
+    pending: 0,
+  });
+
+  const res = await fetch(`/api/books/${bookId}/ai-review/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      include_ai_reviewed: options?.includeAiReviewed === true,
+      scope:
+        options?.scope?.type === "chapter"
+          ? { type: "chapter", chapter_id: options.scope.chapterId }
+          : { type: "flagged" },
+      chapters: options?.chapters,
+    }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+
+  if ((data as { budget_exceeded?: boolean }).budget_exceeded) {
+    const budget = (data as { budget?: { cap: number; spend: number } }).budget;
+    throw new Error(
+      budget
+        ? `AI budget reached ($${budget.spend.toFixed(2)} / $${budget.cap.toFixed(2)}).`
+        : "AI budget reached for this book."
+    );
   }
-  if (scenes === 0 && pendingAi === 0 && pendingHuman > 0) {
-    return `AI finished — ${pendingHuman.toLocaleString()} line${pendingHuman === 1 ? "" : "s"} need human review (Accept AI or confirm in Review)`;
+
+  if (!res.ok) {
+    throw new Error(
+      (data as { error?: string }).error ?? "AI preview failed"
+    );
   }
-  const aiPart =
-    pendingAi > 0 ? `, ${pendingAi.toLocaleString()} awaiting AI` : "";
-  return `Batch ${batch}: reviewed ${scenes} scene${scenes === 1 ? "" : "s"} — ${pendingHuman.toLocaleString()} flagged for review${aiPart}…`;
+
+  const proposals =
+    (data as { proposals?: AiReviewProposal[] }).proposals ?? [];
+  const apiCalls = (data as { api_calls?: number }).api_calls ?? 0;
+  const errors = (data as { errors?: string[] }).errors ?? [];
+
+  onProgress?.({
+    message:
+      proposals.length > 0
+        ? `${proposals.length.toLocaleString()} suggestions ready`
+        : "No changes suggested",
+    progress: 100,
+    batch: 1,
+    pending: proposals.length,
+  });
+
+  return { proposals, errors, api_calls: apiCalls };
 }
 
 export async function runBatchAiReview(
   bookId: string,
   onProgress?: (update: BatchAiReviewProgress) => void,
-  initialFlagged?: number
+  initialFlagged?: number,
+  options?: {
+    createSnapshot?: boolean;
+    includeAiReviewed?: boolean;
+    scope?: AiReviewScope;
+    chapters?: BookChapterRow[];
+  }
 ): Promise<{
   lines_updated: number;
   lines_cleared: number;
@@ -59,7 +124,16 @@ export async function runBatchAiReview(
     const res = await fetch(`/api/books/${bookId}/ai-review`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ max_scenes: 12 }),
+      body: JSON.stringify({
+        max_scenes: 12,
+        create_snapshot: batch === 1 && options?.createSnapshot === true,
+        include_ai_reviewed: options?.includeAiReviewed === true,
+        scope:
+          options?.scope?.type === "chapter"
+            ? { type: "chapter", chapter_id: options.scope.chapterId }
+            : { type: "flagged" },
+        chapters: options?.chapters,
+      }),
     });
 
     const data = await res.json().catch(() => ({}));
@@ -84,9 +158,6 @@ export async function runBatchAiReview(
     hasMore = (data as { has_more?: boolean }).has_more ?? false;
 
     const scenes = (data as { scenes_processed?: number }).scenes_processed ?? 0;
-    const pendingAi =
-      (data as { pending_ai?: number }).pending_ai ??
-      (hasMore ? 1 : 0);
     const pendingHuman =
       (data as { pending_human_review?: number }).pending_human_review ??
       (data as { pending_flagged?: number }).pending_flagged ??
@@ -99,20 +170,11 @@ export async function runBatchAiReview(
       startPending = pendingHuman;
     }
 
-    // No scenes ran but API says more work — avoid infinite loop (stale has_more guard)
     if (hasMore && scenes === 0) {
       if (errs.length > 0) {
-        const first = errs[0] ?? "AI review stalled";
-        throw new Error(
-          first.includes("not_found_error") && first.includes("model:")
-            ? "Claude model not found — set ANTHROPIC_MODEL=claude-sonnet-4-6 in .env.local and restart the dev server"
-            : first
-        );
+        throw new Error(errs[0] ?? "AI review stalled");
       }
-      hasMore = pendingAi > 0;
-      if (!hasMore) {
-        break;
-      }
+      hasMore = false;
     }
 
     let progress: number;
@@ -125,34 +187,19 @@ export async function runBatchAiReview(
       progress = hasMore ? Math.min(95, Math.min(batch * 8, 90)) : 100;
     }
 
-    const message = formatBatchMessage(
-      batch,
-      scenes,
-      pendingAi,
-      pendingHuman,
-      hasMore
-    );
-
     onProgress?.({
-      message,
+      message: `Batch ${batch}: reviewed ${scenes} scene${scenes === 1 ? "" : "s"}…`,
       progress,
       batch,
       pending: pendingHuman,
-      pendingAi,
     });
   }
 
-  const doneMessage =
-    lastPendingHuman > 0
-      ? `AI complete — ${lastPendingHuman.toLocaleString()} line${lastPendingHuman === 1 ? "" : "s"} for human review`
-      : "AI review complete";
-
   onProgress?.({
-    message: doneMessage,
+    message: "AI review complete",
     progress: 100,
     batch,
     pending: lastPendingHuman,
-    pendingAi: 0,
   });
 
   return {

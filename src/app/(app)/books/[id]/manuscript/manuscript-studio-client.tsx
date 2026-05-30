@@ -456,7 +456,11 @@ export function ManuscriptStudioClient({
     );
     markSaving(block.line_ids, true);
     try {
-      await bulkPatch(block.line_ids, { speaker_label, speaker_character_id });
+      await bulkPatch(block.line_ids, {
+        speaker_label,
+        speaker_character_id,
+        human_reviewed: true,
+      });
       for (const id of block.line_ids) {
         applyLinePatch(id, { speaker_label, speaker_character_id });
       }
@@ -515,6 +519,7 @@ export function ManuscriptStudioClient({
       await patchLine(line.id, {
         speaker_label,
         speaker_character_id,
+        human_reviewed: true,
       });
       applyLinePatch(line.id, { speaker_label, speaker_character_id });
       toast.success("Speaker updated");
@@ -710,7 +715,11 @@ export function ManuscriptStudioClient({
     setBulkSaving(true);
     markSaving(ids, true);
     try {
-      await bulkPatch(ids, { speaker_label, speaker_character_id });
+      await bulkPatch(ids, {
+        speaker_label,
+        speaker_character_id,
+        human_reviewed: true,
+      });
       setLines((prev) =>
         prev.map((l) => {
           if (!selectedIds.has(l.id)) return l;

@@ -1,39 +1,11 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api/auth";
-import {
-  runAiReviewForBook,
-  getLatestAiReviewSnapshot,
-} from "@/lib/books/run-ai-review";
-import { restoreLatestAiReviewSnapshot } from "@/lib/books/ai-review-snapshot";
-import { updateBookStatus } from "@/lib/books/compute-book-status";
+import { previewAiReviewForBook } from "@/lib/books/run-ai-review";
 import type { AiReviewScope } from "@/lib/books/ai-review-scope";
 import type { BookChapterRow } from "@/lib/books/book-chapters";
 
 export const maxDuration = 300;
-
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const { user, error } = await requireUser();
-  if (!user) return error;
-
-  const { id } = await params;
-  const admin = createAdminClient();
-  const snapshot = await getLatestAiReviewSnapshot(admin, id);
-
-  return NextResponse.json({
-    can_undo: !!snapshot,
-    snapshot: snapshot
-      ? {
-          id: snapshot.id,
-          created_at: snapshot.created_at,
-          line_count: snapshot.line_count,
-        }
-      : null,
-  });
-}
 
 export async function POST(
   request: Request,
@@ -54,9 +26,7 @@ export async function POST(
   const admin = createAdminClient();
 
   let maxScenes = 12;
-  let createSnapshot = false;
   let includeAiReviewed = false;
-  let undo = false;
   let scope: AiReviewScope = { type: "flagged" };
   let chapters: BookChapterRow[] = [];
 
@@ -65,9 +35,7 @@ export async function POST(
     if (typeof body.max_scenes === "number" && body.max_scenes > 0) {
       maxScenes = Math.min(body.max_scenes, 30);
     }
-    if (body.create_snapshot === true) createSnapshot = true;
     if (body.include_ai_reviewed === true) includeAiReviewed = true;
-    if (body.undo === true) undo = true;
     if (body.scope?.type === "chapter" && body.scope.chapter_id) {
       scope = { type: "chapter", chapterId: body.scope.chapter_id };
     }
@@ -75,7 +43,7 @@ export async function POST(
       chapters = body.chapters as BookChapterRow[];
     }
   } catch {
-    // empty body is fine
+    // defaults
   }
 
   if (scope.type === "chapter" && chapters.length === 0) {
@@ -89,28 +57,16 @@ export async function POST(
     chapters = (data ?? []) as BookChapterRow[];
   }
 
-  if (undo) {
-    try {
-      const { restored } = await restoreLatestAiReviewSnapshot(admin, id);
-      const status = await updateBookStatus(admin, id);
-      return NextResponse.json({ restored, status, undone: true });
-    } catch (e) {
-      const message = e instanceof Error ? e.message : "Undo failed";
-      return NextResponse.json({ error: message }, { status: 400 });
-    }
-  }
-
   try {
-    const result = await runAiReviewForBook(admin, id, apiKey, {
+    const result = await previewAiReviewForBook(admin, id, apiKey, {
       maxScenes,
-      createSnapshot,
       includeAiReviewed,
       scope,
       chapters,
     });
     return NextResponse.json(result);
   } catch (e) {
-    const message = e instanceof Error ? e.message : "AI review failed";
+    const message = e instanceof Error ? e.message : "AI preview failed";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

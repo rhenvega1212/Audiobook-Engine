@@ -11,6 +11,22 @@ import {
   ESTIMATED_USD_PER_AI_SCENE,
   budgetSummary,
 } from "./ai-budget";
+import { fetchSourceParagraphs } from "./manuscript-source";
+import {
+  createAiReviewSnapshot,
+  getLatestAiReviewSnapshot,
+} from "./ai-review-snapshot";
+import {
+  type AiReviewApplyItem,
+  type AiReviewProposal,
+  flagReasonAfterApply,
+  shouldClearFlagAfterApply,
+} from "./ai-review-proposals";
+import {
+  type AiReviewScope,
+  eligibleLineIndices,
+} from "./ai-review-scope";
+import type { BookChapterRow } from "./book-chapters";
 
 function rosterForBook(
   allChars: Character[],
@@ -27,22 +43,16 @@ function rosterForBook(
     );
 }
 
-function shouldClearFlag(
-  speaker: string,
-  confidence: string,
-  hadFlag: boolean
-): boolean {
-  if (!hadFlag) return false;
-  if (speaker === "UNKNOWN") return false;
-  return confidence === "high" || confidence === "medium";
-}
+export type RunAiReviewOptions = {
+  maxScenes?: number;
+  createSnapshot?: boolean;
+  includeAiReviewed?: boolean;
+  scope?: AiReviewScope;
+  chapters?: BookChapterRow[];
+  previewOnly?: boolean;
+};
 
-export async function runAiReviewForBook(
-  admin: SupabaseClient,
-  bookId: string,
-  apiKey: string,
-  options?: { maxScenes?: number }
-) {
+async function loadAiReviewContext(admin: SupabaseClient, bookId: string) {
   const { data: book } = await admin
     .from("books")
     .select("series_id, ai_budget_usd, ai_spend_usd")
@@ -50,27 +60,6 @@ export async function runAiReviewForBook(
     .single();
 
   if (!book) throw new Error("Book not found");
-
-  const budgetUsd = Number(book.ai_budget_usd ?? 500);
-  const spendUsd = Number(book.ai_spend_usd ?? 0);
-  if (!canRunAiScene(spendUsd, budgetUsd, 1)) {
-    const summary = budgetSummary(spendUsd, budgetUsd);
-    return {
-      scenes_total: 0,
-      scenes_processed: 0,
-      lines_updated: 0,
-      api_calls: 0,
-      lines_cleared: 0,
-      status: await updateBookStatus(admin, bookId),
-      has_more: false,
-      pending_flagged: 0,
-      errors: [
-        `AI budget reached ($${summary.spend.toFixed(2)} / $${summary.cap.toFixed(2)}). Raise the book budget or add Anthropic credits.`,
-      ],
-      budget_exceeded: true,
-      budget: summary,
-    };
-  }
 
   const { data: chars } = await admin
     .from("characters")
@@ -84,57 +73,301 @@ export async function runAiReviewForBook(
 
   const idsInBook = new Set((bookChars ?? []).map((bc) => bc.character_id));
   const roster = rosterForBook((chars ?? []) as Character[], idsInBook);
-
   const dbLines = await fetchAllTaggedLines(admin, bookId, "*");
+  const sourceParagraphs = await fetchSourceParagraphs(admin, bookId);
 
-  const engineLines = dbLines.map((l) => ({
+  return {
+    book,
+    chars: (chars ?? []) as Character[],
+    roster,
+    dbLines,
+    sourceParagraphs,
+    spendUsd: Number(book.ai_spend_usd ?? 0),
+    budgetUsd: Number(book.ai_budget_usd ?? 500),
+  };
+}
+
+function buildEngineLines(dbLines: Awaited<ReturnType<typeof loadAiReviewContext>>["dbLines"]) {
+  return dbLines.map((l) => ({
     speaker: l.speaker_label,
     line: l.line_text,
     paragraph_num: l.paragraph_num,
     confidence: (l.confidence ?? "none") as "high" | "medium" | "low" | "none",
     flag_reason: l.flag_reason,
     ai_reviewed: l.ai_reviewed ?? false,
+    human_reviewed: l.human_reviewed ?? false,
   }));
+}
 
-  const result = await runAiAssistedPass(
-    engineLines,
-    roster,
-    apiKey,
-    options
-  );
+export async function previewAiReviewForBook(
+  admin: SupabaseClient,
+  bookId: string,
+  apiKey: string,
+  options?: RunAiReviewOptions
+) {
+  const ctx = await loadAiReviewContext(admin, bookId);
+  if (!canRunAiScene(ctx.spendUsd, ctx.budgetUsd, 1)) {
+    const summary = budgetSummary(ctx.spendUsd, ctx.budgetUsd);
+    return {
+      proposals: [] as AiReviewProposal[],
+      scenes_total: 0,
+      scenes_processed: 0,
+      api_calls: 0,
+      has_more: false,
+      errors: [
+        `AI budget reached ($${summary.spend.toFixed(2)} / $${summary.cap.toFixed(2)}).`,
+      ],
+      budget_exceeded: true,
+      budget: summary,
+    };
+  }
 
-  if (result.api_calls > 0) {
-    const added = result.api_calls * ESTIMATED_USD_PER_AI_SCENE;
+  const scope = options?.scope ?? { type: "flagged" as const };
+  const chapters = options?.chapters ?? [];
+  const eligible = eligibleLineIndices(ctx.dbLines, scope, chapters);
+  const previewProcessed = new Set<number>();
+  const allProposals: AiReviewProposal[] = [];
+  const allErrors: string[] = [];
+  let totalApiCalls = 0;
+  let scenesProcessed = 0;
+  let scenesTotal = 0;
+  let hasMore = true;
+  let spendAfter = ctx.spendUsd;
+
+  const engineLines = buildEngineLines(ctx.dbLines);
+  const passOptions = {
+    previewOnly: true as const,
+    includeAiReviewed: options?.includeAiReviewed,
+    eligibleIndices: eligible,
+    previewProcessed,
+    paragraphNums: ctx.dbLines.map((l) => l.paragraph_num),
+    sourceParagraphs: ctx.sourceParagraphs ?? undefined,
+    lineIds: ctx.dbLines.map((l) => l.id),
+    lineOrders: ctx.dbLines.map((l) => l.line_order),
+    maxScenes: options?.maxScenes ?? 12,
+  };
+
+  while (hasMore && totalApiCalls < 40) {
+    if (!canRunAiScene(spendAfter, ctx.budgetUsd, 1)) {
+      allErrors.push("AI budget reached before preview completed.");
+      break;
+    }
+
+    const result = await runAiAssistedPass(
+      engineLines,
+      ctx.roster,
+      apiKey,
+      passOptions
+    );
+
+    scenesTotal = result.scenes_total;
+    scenesProcessed += result.scenes_processed;
+    totalApiCalls += result.api_calls;
+    spendAfter += result.api_calls * ESTIMATED_USD_PER_AI_SCENE;
+    allErrors.push(...result.errors);
+
+    for (const p of result.proposals) {
+      if (!allProposals.some((x) => x.line_id === p.line_id)) {
+        allProposals.push(p);
+      }
+    }
+    for (const idx of result.processed_line_indices) {
+      previewProcessed.add(idx);
+    }
+
+    hasMore = result.has_more;
+    if (result.scenes_processed === 0) break;
+  }
+
+  if (totalApiCalls > 0) {
     await admin
       .from("books")
-      .update({ ai_spend_usd: spendUsd + added })
+      .update({ ai_spend_usd: spendAfter })
       .eq("id", bookId);
   }
 
-  const processedSet = new Set(result.processed_line_indices);
+  return {
+    proposals: allProposals,
+    scenes_total: scenesTotal,
+    scenes_processed: scenesProcessed,
+    api_calls: totalApiCalls,
+    has_more: false,
+    errors: allErrors,
+    used_source_paragraphs: !!ctx.sourceParagraphs?.length,
+  };
+}
+
+export async function applyAiReviewProposals(
+  admin: SupabaseClient,
+  bookId: string,
+  items: AiReviewApplyItem[],
+  options?: { createSnapshot?: boolean }
+) {
+  const accepted = items.filter((i) => i.accept);
+  if (accepted.length === 0) {
+    return { applied: 0, lines_cleared: 0, status: await updateBookStatus(admin, bookId) };
+  }
+
+  let snapshotId: string | null = null;
+  if (options?.createSnapshot) {
+    const snap = await createAiReviewSnapshot(admin, bookId);
+    snapshotId = snap?.id ?? null;
+  }
+
+  const { data: chars } = await admin
+    .from("characters")
+    .select("*")
+    .eq(
+      "series_id",
+      (
+        await admin.from("books").select("series_id").eq("id", bookId).single()
+      ).data?.series_id ?? ""
+    );
+
+  const acceptSet = new Set(accepted.map((a) => a.line_id));
+  const { data: dbLines } = await admin
+    .from("tagged_lines")
+    .select(
+      "id, speaker_label, flag_reason, human_reviewed, confidence, ai_reviewed"
+    )
+    .eq("book_id", bookId)
+    .in("id", [...acceptSet]);
+
+  let applied = 0;
   let linesCleared = 0;
+
+  for (const item of accepted) {
+    const dbLine = dbLines?.find((l) => l.id === item.line_id);
+    if (!dbLine || dbLine.human_reviewed) continue;
+
+    const char = findCharacterBySpeaker(item.speaker, (chars ?? []) as Character[]);
+    const hadFlag = !!dbLine.flag_reason;
+    const clearFlag = shouldClearFlagAfterApply(
+      item.speaker,
+      item.confidence,
+      hadFlag
+    );
+    if (clearFlag) linesCleared++;
+
+    const newFlagReason = flagReasonAfterApply(
+      dbLine.speaker_label,
+      item.speaker,
+      dbLine.flag_reason,
+      item.confidence,
+      clearFlag
+    );
+
+    await admin
+      .from("tagged_lines")
+      .update({
+        speaker_label: char?.canonical_name ?? item.speaker,
+        speaker_character_id: char?.id ?? null,
+        confidence: item.confidence,
+        flag_reason: newFlagReason,
+        ai_reviewed: true,
+      })
+      .eq("id", item.line_id);
+
+    applied++;
+  }
+
+  const status = await updateBookStatus(admin, bookId);
+  return { applied, lines_cleared: linesCleared, status, snapshot_id: snapshotId };
+}
+
+/** Direct apply (legacy / upload flow) — skips preview step. */
+export async function runAiReviewForBook(
+  admin: SupabaseClient,
+  bookId: string,
+  apiKey: string,
+  options?: RunAiReviewOptions
+) {
+  const ctx = await loadAiReviewContext(admin, bookId);
+  if (!canRunAiScene(ctx.spendUsd, ctx.budgetUsd, 1)) {
+    const summary = budgetSummary(ctx.spendUsd, ctx.budgetUsd);
+    return {
+      scenes_total: 0,
+      scenes_processed: 0,
+      lines_updated: 0,
+      api_calls: 0,
+      lines_cleared: 0,
+      status: await updateBookStatus(admin, bookId),
+      has_more: false,
+      pending_flagged: 0,
+      errors: [
+        `AI budget reached ($${summary.spend.toFixed(2)} / $${summary.cap.toFixed(2)}). Raise the book budget on the book page.`,
+      ],
+      budget_exceeded: true,
+      budget: summary,
+    };
+  }
+
+  let snapshotId: string | null = null;
+  if (options?.createSnapshot) {
+    const snap = await createAiReviewSnapshot(admin, bookId);
+    snapshotId = snap?.id ?? null;
+  }
+
+  const scope = options?.scope ?? { type: "flagged" as const };
+  const chapters = options?.chapters ?? [];
+  const eligible = eligibleLineIndices(ctx.dbLines, scope, chapters);
+
+  const result = await runAiAssistedPass(
+    buildEngineLines(ctx.dbLines),
+    ctx.roster,
+    apiKey,
+    {
+      maxScenes: options?.maxScenes,
+      includeAiReviewed: options?.includeAiReviewed,
+      eligibleIndices: eligible,
+      paragraphNums: ctx.dbLines.map((l) => l.paragraph_num),
+      sourceParagraphs: ctx.sourceParagraphs ?? undefined,
+      lineIds: ctx.dbLines.map((l) => l.id),
+      lineOrders: ctx.dbLines.map((l) => l.line_order),
+    }
+  );
+
+  if (result.api_calls > 0) {
+    await admin
+      .from("books")
+      .update({
+        ai_spend_usd: ctx.spendUsd + result.api_calls * ESTIMATED_USD_PER_AI_SCENE,
+      })
+      .eq("id", bookId);
+  }
+
+  let linesCleared = 0;
+  let linesSkippedHuman = 0;
 
   async function applyUpdate(globalIdx: number) {
     const updated = result.lines[globalIdx];
-    const dbLine = dbLines[globalIdx];
-    if (!updated || !dbLine?.flag_reason) return;
+    const dbLine = ctx.dbLines[globalIdx];
+    if (!updated || !dbLine) return;
 
-    const char = findCharacterBySpeaker(
-      updated.speaker,
-      (chars ?? []) as Character[]
-    );
+    if (dbLine.human_reviewed) {
+      linesSkippedHuman++;
+      return;
+    }
 
-    const clearFlag = shouldClearFlag(
+    const wasFlagged = !!dbLine.flag_reason;
+    const wasProcessed = result.processed_line_indices.includes(globalIdx);
+    if (!wasProcessed) return;
+
+    const char = findCharacterBySpeaker(updated.speaker, ctx.chars);
+
+    const clearFlag = shouldClearFlagAfterApply(
       updated.speaker,
       updated.confidence ?? "none",
-      !!dbLine.flag_reason
+      wasFlagged
     );
 
-    const newFlagReason = clearFlag
-      ? null
-      : updated.speaker !== dbLine.speaker_label
-        ? `ai_reviewed (was: ${dbLine.flag_reason}; changed: ${dbLine.speaker_label} → ${updated.speaker})`
-        : `ai_confirmed (was: ${dbLine.flag_reason})`;
+    const newFlagReason = flagReasonAfterApply(
+      dbLine.speaker_label,
+      updated.speaker,
+      dbLine.flag_reason,
+      updated.confidence ?? "none",
+      clearFlag
+    );
 
     if (clearFlag) linesCleared++;
 
@@ -172,20 +405,22 @@ export async function runAiReviewForBook(
       .not("flag_reason", "is", null),
   ]);
 
-  const needsAi = pendingAi ?? 0;
-  const needsHuman = pendingHuman ?? 0;
-
   return {
     scenes_total: result.scenes_total,
     scenes_processed: result.scenes_processed,
     lines_updated: result.lines_updated,
     api_calls: result.api_calls,
     lines_cleared: linesCleared,
+    lines_skipped_human: linesSkippedHuman,
     status,
-    has_more: needsAi > 0,
-    pending_flagged: needsHuman,
-    pending_ai: needsAi,
-    pending_human_review: needsHuman,
+    has_more: result.has_more,
+    pending_flagged: pendingHuman ?? 0,
+    pending_ai: pendingAi ?? 0,
+    pending_human_review: pendingHuman ?? 0,
     errors: result.errors,
+    snapshot_id: snapshotId,
+    used_source_paragraphs: !!ctx.sourceParagraphs?.length,
   };
 }
+
+export { getLatestAiReviewSnapshot };
