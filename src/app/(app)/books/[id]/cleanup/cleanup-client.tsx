@@ -173,7 +173,14 @@ export function CleanupClient({
         throw new Error((data as { error?: string }).error ?? "Delete failed");
       }
       const removed = new Set(selectedLineIds);
-      setLines((prev) => prev.filter((l) => !removed.has(l.id)));
+      setLines((prev) =>
+        prev
+          .filter((l) => !removed.has(l.id))
+          .sort((a, b) => a.line_order - b.line_order)
+          .map((l, i) => ({ ...l, line_order: i }))
+      );
+      const chapters = (data as { chapters?: BookChapterRow[] }).chapters;
+      if (chapters) setBookChapters(chapters);
       clearSelection();
       toast.success(
         `Removed ${selectedLineIds.length.toLocaleString()} lines from the manuscript`

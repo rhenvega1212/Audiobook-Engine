@@ -1,5 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
+import { resyncBookChapterPositions } from "@/lib/books/book-chapters";
 import { notFound } from "next/navigation";
 import { displayBookTitle } from "@/lib/books/display-title";
 import { CleanupClient } from "./cleanup-client";
@@ -32,10 +34,20 @@ export default async function CleanupPage({
     .eq("book_id", id)
     .order("start_line_order");
 
-  const bookChapters =
+  let bookChapters =
     chaptersResult.error == null
       ? ((chaptersResult.data ?? []) as BookChapterRow[])
       : [];
+
+  // Repair chapter boundaries after prior deletes (line_order renumber drift)
+  if (bookChapters.length > 0) {
+    try {
+      const admin = createAdminClient();
+      bookChapters = await resyncBookChapterPositions(admin, id);
+    } catch (e) {
+      console.warn("Chapter position resync skipped:", e);
+    }
+  }
 
   let dbLines: {
     id: string;

@@ -1,5 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
+import { resyncBookChapterPositions } from "@/lib/books/book-chapters";
 import { notFound } from "next/navigation";
 import { displayBookTitle } from "@/lib/books/display-title";
 import { findCharacterBySpeaker } from "@/lib/characters/resolve-character";
@@ -53,6 +55,16 @@ export default async function ManuscriptStudioPage({
     chaptersResult.error == null
       ? ((chaptersResult.data ?? []) as BookChapterRow[])
       : [];
+
+  let syncedChapters = bookChapters;
+  if (bookChapters.length > 0) {
+    try {
+      const admin = createAdminClient();
+      syncedChapters = await resyncBookChapterPositions(admin, id);
+    } catch (e) {
+      console.warn("Chapter position resync skipped:", e);
+    }
+  }
 
   const roster = (characters ?? []) as Character[];
 
@@ -109,7 +121,7 @@ export default async function ManuscriptStudioPage({
       initialLineId={initialLineId}
       initialSpeaker={initialSpeaker}
       initialFlaggedOnly={flagged === "1"}
-      initialBookChapters={(bookChapters ?? []) as BookChapterRow[]}
+      initialBookChapters={(syncedChapters ?? []) as BookChapterRow[]}
     />
   );
 }

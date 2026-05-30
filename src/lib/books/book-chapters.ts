@@ -92,32 +92,96 @@ export function chaptersFromRecords(
 ): ManuscriptChapter[] {
   if (records.length === 0) return [];
 
-  const sorted = [...records].sort(
-    (a, b) => a.start_line_order - b.start_line_order
-  );
+  const orderByLineId = new Map(lines.map((l) => [l.id, l.line_order]));
+
+  const sorted = [...records].sort((a, b) => {
+    const orderA =
+      (a.start_line_id ? orderByLineId.get(a.start_line_id) : undefined) ??
+      a.start_line_order;
+    const orderB =
+      (b.start_line_id ? orderByLineId.get(b.start_line_id) : undefined) ??
+      b.start_line_order;
+    return orderA - orderB;
+  });
+
   const maxOrder = lines[lines.length - 1]?.line_order ?? 0;
 
   return sorted.map((ch, i) => {
+    const startLineOrder =
+      (ch.start_line_id ? orderByLineId.get(ch.start_line_id) : undefined) ??
+      ch.start_line_order;
     const next = sorted[i + 1];
-    const endLineOrder = next ? next.start_line_order - 1 : maxOrder;
+    const nextStart =
+      next == null
+        ? null
+        : ((next.start_line_id
+            ? orderByLineId.get(next.start_line_id)
+            : undefined) ?? next.start_line_order);
+    const endLineOrder = nextStart != null ? nextStart - 1 : maxOrder;
     const firstLineId =
       ch.start_line_id ??
-      lines.find((l) => l.line_order === ch.start_line_order)?.id ??
+      lines.find((l) => l.line_order === startLineOrder)?.id ??
       lines[0]!.id;
 
     return {
       id: ch.id,
       title: ch.title,
-      startLineOrder: ch.start_line_order,
-      endLineOrder: endLineOrder,
+      startLineOrder,
+      endLineOrder,
       firstLineId,
       lineCount: lines.filter(
-        (l) =>
-          l.line_order >= ch.start_line_order &&
-          l.line_order <= endLineOrder
+        (l) => l.line_order >= startLineOrder && l.line_order <= endLineOrder
       ).length,
     };
   });
+}
+
+/** After line delete/merge renumbering, align chapter start_line_order with live line ids. */
+export async function resyncBookChapterPositions(
+  admin: SupabaseClient,
+  bookId: string
+): Promise<BookChapterRow[]> {
+  const lines = await fetchAllTaggedLines<{ id: string; line_order: number }>(
+    admin,
+    bookId,
+    "id, line_order"
+  );
+  const orderById = new Map(lines.map((l) => [l.id, l.line_order]));
+
+  const { data: chapters, error } = await admin
+    .from("book_chapters")
+    .select("*")
+    .eq("book_id", bookId);
+
+  if (error) throw new Error(error.message);
+
+  const toDelete: string[] = [];
+
+  for (const ch of (chapters ?? []) as BookChapterRow[]) {
+    if (!ch.start_line_id) {
+      toDelete.push(ch.id);
+      continue;
+    }
+    const currentOrder = orderById.get(ch.start_line_id);
+    if (currentOrder === undefined) {
+      toDelete.push(ch.id);
+      continue;
+    }
+    if (ch.start_line_order !== currentOrder) {
+      const { error: updError } = await admin
+        .from("book_chapters")
+        .update({ start_line_order: currentOrder })
+        .eq("id", ch.id);
+      if (updError) throw new Error(updError.message);
+      ch.start_line_order = currentOrder;
+    }
+  }
+
+  if (toDelete.length > 0) {
+    await admin.from("book_chapters").delete().in("id", toDelete);
+  }
+
+  return resyncChapterSortOrders(admin, bookId);
 }
 
 export async function rebuildAutoBookChapters(

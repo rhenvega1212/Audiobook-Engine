@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
 import { updateBookStatus } from "@/lib/books/compute-book-status";
+import { resyncBookChapterPositions, type BookChapterRow } from "@/lib/books/book-chapters";
 import { isSplitInsideQuote } from "@/lib/engine/quote-spans";
 
 export type LineSegment = {
@@ -305,6 +306,7 @@ export async function mergeTaggedLines(
   if (delError) throw new Error(delError.message);
 
   await renumberBookLines(admin, bookId);
+  await resyncBookChapterPositions(admin, bookId);
   await recomputeBookCharacterCounts(admin, bookId);
   await updateBookStatus(admin, bookId);
 
@@ -315,7 +317,7 @@ export async function deleteTaggedLines(
   admin: SupabaseClient,
   bookId: string,
   lineIds: string[]
-): Promise<{ deleted: number }> {
+): Promise<{ deleted: number; chapters: BookChapterRow[] }> {
   if (lineIds.length === 0) throw new Error("No lines selected");
 
   const { error } = await admin
@@ -345,8 +347,9 @@ export async function deleteTaggedLines(
     .is("start_line_id", null);
 
   await renumberBookLines(admin, bookId);
+  const chapters = await resyncBookChapterPositions(admin, bookId);
   await recomputeBookCharacterCounts(admin, bookId);
   await updateBookStatus(admin, bookId);
 
-  return { deleted: lineIds.length };
+  return { deleted: lineIds.length, chapters };
 }

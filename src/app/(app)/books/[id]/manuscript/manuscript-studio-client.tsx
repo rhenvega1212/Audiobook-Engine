@@ -822,20 +822,19 @@ export function ManuscriptStudioClient({
         throw new Error((data as { error?: string }).error ?? "Delete failed");
       }
 
-      setDeleteProgress(82);
-      setDeleteStage("Renumbering manuscript…");
-
-      const removed = new Set(ids);
-      setLines((prev) => {
-        const kept = prev.filter((l) => !removed.has(l.id));
-        return kept.map((l, i) => ({ ...l, line_order: i }));
-      });
-
       setDeleteProgress(92);
       setDeleteStage("Updating chapters…");
-      setBookChapters((prev) =>
-        prev.filter((ch) => !ch.start_line_id || !removed.has(ch.start_line_id))
+
+      const removed = new Set(ids);
+      setLines((prev) =>
+        prev
+          .filter((l) => !removed.has(l.id))
+          .sort((a, b) => a.line_order - b.line_order)
+          .map((l, i) => ({ ...l, line_order: i }))
       );
+
+      const chapters = (data as { chapters?: BookChapterRow[] }).chapters;
+      if (chapters) setBookChapters(chapters);
 
       setDeleteProgress(100);
       setDeleteStage("Done");
