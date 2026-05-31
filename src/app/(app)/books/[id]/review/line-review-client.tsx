@@ -51,6 +51,13 @@ export function LineReviewClient({
   useEffect(() => {
     setCharacters(initialCharacters);
   }, [initialCharacters]);
+
+  const [lineRows, setLineRows] = useState(allLines);
+
+  useEffect(() => {
+    setLineRows(allLines);
+  }, [allLines]);
+
   const [queue, setQueue] = useState(
     flaggedLines.filter((l) => !l.human_reviewed)
   );
@@ -65,19 +72,22 @@ export function LineReviewClient({
   const [aiReviewMessage, setAiReviewMessage] = useState("");
   const [acceptAiOpen, setAcceptAiOpen] = useState(false);
 
-  const current = queue[0];
+  const currentFromQueue = queue[0];
+  const current = currentFromQueue
+    ? (lineRows.find((l) => l.id === currentFromQueue.id) ?? currentFromQueue)
+    : undefined;
   const total = flaggedLines.length;
   const progress = total > 0 ? (reviewed / total) * 100 : 100;
 
   const currentIndex = current
-    ? allLines.findIndex((l) => l.id === current.id)
+    ? lineRows.findIndex((l) => l.id === current.id)
     : -1;
 
-  const contextBefore = allLines.slice(
+  const contextBefore = lineRows.slice(
     Math.max(0, currentIndex - 3),
     currentIndex
   );
-  const contextAfter = allLines.slice(currentIndex + 1, currentIndex + 4);
+  const contextAfter = lineRows.slice(currentIndex + 1, currentIndex + 4);
 
   useEffect(() => {
     if (current) {
@@ -117,8 +127,17 @@ export function LineReviewClient({
       return;
     }
     setHistory((h) => h.slice(0, -1));
-    setQueue((q) => [prev, ...q]);
+    setQueue((q) => [
+      lineRows.find((l) => l.id === prev.id) ?? prev,
+      ...q,
+    ]);
     setReviewed((r) => Math.max(0, r - 1));
+  }
+
+  function patchLineRow(lineId: string, patch: Partial<TaggedLine>) {
+    setLineRows((rows) =>
+      rows.map((l) => (l.id === lineId ? { ...l, ...patch } : l))
+    );
   }
 
   async function confirmLine() {
@@ -129,7 +148,7 @@ export function LineReviewClient({
       current.speaker_label,
       speakerHint
     );
-    await fetch(`/api/books/${bookId}/lines/${current.id}`, {
+    const res = await fetch(`/api/books/${bookId}/lines/${current.id}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -138,16 +157,36 @@ export function LineReviewClient({
         human_reviewed: true,
       }),
     });
-    advance();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(
+        (data as { error?: string }).error ?? "Could not save speaker"
+      );
+      return;
+    }
+    const saved = data as TaggedLine;
+    patchLineRow(current.id, saved);
+    setQueue((q) => {
+      if (q.length === 0) return q;
+      const [, ...rest] = q;
+      setHistory((h) => [...h, { ...current, ...saved }]);
+      return rest;
+    });
+    setReviewed((r) => r + 1);
   }
 
   async function skipLine() {
     if (!current) return;
-    await fetch(`/api/books/${bookId}/lines/${current.id}`, {
+    const res = await fetch(`/api/books/${bookId}/lines/${current.id}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ human_reviewed: true }),
     });
+    if (!res.ok) {
+      toast.error("Could not skip line");
+      return;
+    }
+    patchLineRow(current.id, { human_reviewed: true });
     advance();
   }
 
