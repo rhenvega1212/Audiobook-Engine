@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -22,6 +22,31 @@ import { PerformLineRecorder } from "@/components/audio/perform-line-recorder";
 import { resolveSpokenLine, type PronunciationEntry } from "@/lib/pronunciation/apply";
 import { runBatchAiReview } from "@/lib/books/run-ai-review-client";
 import { AcceptAiPreviewDialog } from "@/components/books/accept-ai-preview-dialog";
+import {
+  NARRATOR_VALUE,
+  UNKNOWN_VALUE,
+} from "@/lib/manuscript/speaker-utils";
+
+function formatApiError(data: unknown, fallback: string): string {
+  if (!data || typeof data !== "object") return fallback;
+  const err = (data as { error?: unknown }).error;
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object") return fallback;
+  return fallback;
+}
+
+function speakerLabelFromSelection(
+  speakerId: string,
+  characters: SpeakerCharacter[],
+  hint?: SpeakerCharacter
+): string {
+  if (speakerId === NARRATOR_VALUE) return "Narrator";
+  if (speakerId === UNKNOWN_VALUE) return "UNKNOWN";
+  const char =
+    characters.find((c) => c.id === speakerId) ??
+    (hint?.id === speakerId ? hint : undefined);
+  return char?.canonical_name ?? "";
+}
 
 export function LineReviewClient({
   bookId,
@@ -53,10 +78,7 @@ export function LineReviewClient({
   }, [initialCharacters]);
 
   const [lineRows, setLineRows] = useState(allLines);
-
-  useEffect(() => {
-    setLineRows(allLines);
-  }, [allLines]);
+  const saveSeqRef = useRef(0);
 
   const [queue, setQueue] = useState(
     flaggedLines.filter((l) => !l.human_reviewed)
@@ -64,6 +86,8 @@ export function LineReviewClient({
   const [history, setHistory] = useState<TaggedLine[]>([]);
   const [reviewed, setReviewed] = useState(initialReviewed);
   const [goingBack, setGoingBack] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [savingSpeaker, setSavingSpeaker] = useState(false);
   const [speakerId, setSpeakerId] = useState<string>("");
   const [speakerHint, setSpeakerHint] = useState<SpeakerCharacter | undefined>();
   const [spokenText, setSpokenText] = useState("");
@@ -126,6 +150,7 @@ export function LineReviewClient({
       toast.error("Could not go back to previous line");
       return;
     }
+    patchLineRow(prev.id, { human_reviewed: false });
     setHistory((h) => h.slice(0, -1));
     setQueue((q) => [
       lineRows.find((l) => l.id === prev.id) ?? prev,
@@ -140,54 +165,109 @@ export function LineReviewClient({
     );
   }
 
-  async function confirmLine() {
-    if (!current) return;
-    const speaker = resolveLineSpeakerPayload(
-      speakerId,
-      characters,
-      current.speaker_label,
-      speakerHint
-    );
-    const res = await fetch(`/api/books/${bookId}/lines/${current.id}`, {
+  const effectiveSpeakerId =
+    speakerId ||
+    (current
+      ? resolveSpeakerIdFromLine(
+          current.speaker_label,
+          current.speaker_character_id,
+          characters
+        )
+      : "");
+
+  async function persistLine(
+    line: TaggedLine,
+    body: Record<string, unknown>
+  ): Promise<TaggedLine | null> {
+    const res = await fetch(`/api/books/${bookId}/lines/${line.id}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...speaker,
-        spoken_text: spokenText.trim() || null,
-        human_reviewed: true,
-      }),
+      body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      toast.error(
-        (data as { error?: string }).error ?? "Could not save speaker"
-      );
-      return;
+      toast.error(formatApiError(data, "Could not save line"));
+      return null;
     }
-    const saved = data as TaggedLine;
-    patchLineRow(current.id, saved);
-    setQueue((q) => {
-      if (q.length === 0) return q;
-      const [, ...rest] = q;
-      setHistory((h) => [...h, { ...current, ...saved }]);
-      return rest;
+    const { book_status: _status, ...saved } = data as TaggedLine & {
+      book_status?: string;
+    };
+    return saved as TaggedLine;
+  }
+
+  async function saveSpeakerSelection(
+    line: TaggedLine,
+    nextSpeakerId: string,
+    hint?: SpeakerCharacter
+  ) {
+    const id =
+      nextSpeakerId ||
+      resolveSpeakerIdFromLine(
+        line.speaker_label,
+        line.speaker_character_id,
+        characters
+      );
+    const speaker = resolveLineSpeakerPayload(
+      id,
+      characters,
+      line.speaker_label,
+      hint
+    );
+    const seq = ++saveSeqRef.current;
+    setSavingSpeaker(true);
+    const saved = await persistLine(line, {
+      ...speaker,
+      human_reviewed: false,
     });
-    setReviewed((r) => r + 1);
+    setSavingSpeaker(false);
+    if (!saved || seq !== saveSeqRef.current) return null;
+    patchLineRow(line.id, saved);
+    return saved;
+  }
+
+  async function confirmLine() {
+    if (!current || confirming) return;
+    setConfirming(true);
+    try {
+      const speaker = resolveLineSpeakerPayload(
+        effectiveSpeakerId,
+        characters,
+        current.speaker_label,
+        speakerHint
+      );
+      const saved = await persistLine(current, {
+        ...speaker,
+        spoken_text: spokenText.trim() || null,
+        human_reviewed: true,
+        flag_reason: null,
+      });
+      if (!saved) return;
+
+      patchLineRow(current.id, saved);
+      setQueue((q) => {
+        if (q.length === 0) return q;
+        const [, ...rest] = q;
+        setHistory((h) => [...h, { ...current, ...saved }]);
+        return rest;
+      });
+      setReviewed((r) => r + 1);
+      toast.success("Saved");
+    } finally {
+      setConfirming(false);
+    }
   }
 
   async function skipLine() {
-    if (!current) return;
-    const res = await fetch(`/api/books/${bookId}/lines/${current.id}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ human_reviewed: true }),
-    });
-    if (!res.ok) {
-      toast.error("Could not skip line");
-      return;
+    if (!current || confirming) return;
+    setConfirming(true);
+    try {
+      const saved = await persistLine(current, { human_reviewed: true });
+      if (!saved) return;
+      patchLineRow(current.id, saved);
+      advance();
+    } finally {
+      setConfirming(false);
     }
-    patchLineRow(current.id, { human_reviewed: true });
-    advance();
   }
 
   async function aiSuggestion() {
@@ -242,12 +322,15 @@ export function LineReviewClient({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) {
+        return;
+      }
+      if (confirming) return;
       if (e.key === "Enter") {
         e.preventDefault();
-        confirmLine();
+        void confirmLine();
       } else if (e.key === "s" || e.key === "S") {
-        skipLine();
+        void skipLine();
       } else if (e.key === "a" || e.key === "A") {
         aiSuggestion();
       }
@@ -255,6 +338,11 @@ export function LineReviewClient({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+  const selectedSpeakerLabel =
+    speakerLabelFromSelection(effectiveSpeakerId, characters, speakerHint) ||
+    current?.speaker_label ||
+    "";
 
   const currentSpoken = current
     ? resolveSpokenLine(current.line_text, current.spoken_text, dictionary)
@@ -326,7 +414,10 @@ export function LineReviewClient({
 
       <Card className="border-l-4 border-l-teal p-4 mb-4">
         <p className="text-xs uppercase tracking-wider text-slate mb-2">
-          Current: {current.speaker_label}
+          Current: {selectedSpeakerLabel}
+          {savingSpeaker && (
+            <span className="ml-2 normal-case text-teal">Saving…</span>
+          )}
           {current.flag_reason && (
             <span className="ml-2 normal-case">({current.flag_reason})</span>
           )}
@@ -394,6 +485,9 @@ export function LineReviewClient({
           onValueChange={(id, character) => {
             setSpeakerId(id);
             setSpeakerHint(character);
+            if (current) {
+              void saveSpeakerSelection(current, id, character);
+            }
           }}
           characters={characters}
           onCharacterCreated={(c) => {
@@ -402,7 +496,10 @@ export function LineReviewClient({
               return [...prev, c];
             });
             setSpeakerHint(c);
-            router.refresh();
+            setSpeakerId(c.id);
+            if (current) {
+              void saveSpeakerSelection(current, c.id, c);
+            }
           }}
         />
       </div>
@@ -440,8 +537,10 @@ export function LineReviewClient({
         >
           Go back
         </Button>
-        <Button onClick={confirmLine}>Confirm (Enter)</Button>
-        <Button variant="ghost" onClick={skipLine}>
+        <Button onClick={() => void confirmLine()} disabled={confirming || savingSpeaker}>
+          {confirming ? "Saving…" : "Confirm (Enter)"}
+        </Button>
+        <Button variant="ghost" onClick={() => void skipLine()} disabled={confirming}>
           Skip (S)
         </Button>
         <Button

@@ -17,14 +17,35 @@ export async function POST(
   const parsed = lineUpdateSchema.safeParse(body);
 
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json(
+      { error: "Invalid line update", details: parsed.error.flatten() },
+      { status: 400 }
+    );
   }
 
   const supabase = await createClient();
-  const updates = {
-    ...parsed.data,
-    human_reviewed: parsed.data.human_reviewed ?? true,
-  };
+  const payload = parsed.data;
+  const updates: Record<string, unknown> = { ...payload };
+
+  if (payload.human_reviewed === undefined) {
+    const speakerOnly =
+      payload.speaker_label !== undefined ||
+      payload.speaker_character_id !== undefined;
+    if (!speakerOnly) {
+      updates.human_reviewed = true;
+    } else {
+      delete updates.human_reviewed;
+    }
+  }
+
+  if (
+    payload.human_reviewed === true &&
+    payload.flag_reason === undefined &&
+    payload.speaker_label &&
+    payload.speaker_label !== "UNKNOWN"
+  ) {
+    updates.flag_reason = null;
+  }
 
   const { data, error: dbError } = await supabase
     .from("tagged_lines")
@@ -36,6 +57,9 @@ export async function POST(
 
   if (dbError) {
     return NextResponse.json({ error: dbError.message }, { status: 500 });
+  }
+  if (!data) {
+    return NextResponse.json({ error: "Line not found or not updated" }, { status: 404 });
   }
 
   const admin = createAdminClient();
