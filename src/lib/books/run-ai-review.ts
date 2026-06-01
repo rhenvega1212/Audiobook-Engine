@@ -27,6 +27,10 @@ import {
   eligibleLineIndices,
 } from "./ai-review-scope";
 import type { BookChapterRow } from "./book-chapters";
+import {
+  summarizeAiReviewEligibility,
+  type AiReviewEligibilityStats,
+} from "./ai-review-eligibility";
 
 function rosterForBook(
   allChars: Character[],
@@ -126,6 +130,12 @@ export async function previewAiReviewForBook(
 
   const scope = options?.scope ?? { type: "flagged" as const };
   const chapters = options?.chapters ?? [];
+  const eligibility = summarizeAiReviewEligibility(
+    ctx.dbLines,
+    scope,
+    chapters,
+    options?.includeAiReviewed === true
+  );
   const eligible = eligibleLineIndices(ctx.dbLines, scope, chapters);
   const previewProcessed = new Set(options?.processedIndices ?? []);
 
@@ -176,8 +186,11 @@ export async function previewAiReviewForBook(
     processed_indices: [...previewProcessed],
     errors: result.errors,
     used_source_paragraphs: !!ctx.sourceParagraphs?.length,
+    eligibility,
   };
 }
+
+export type { AiReviewEligibilityStats };
 
 export async function applyAiReviewProposals(
   admin: SupabaseClient,

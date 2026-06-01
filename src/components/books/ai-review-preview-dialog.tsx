@@ -14,6 +14,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { AiReviewProposal } from "@/lib/books/ai-review-proposals";
+import { describeAiEligibility } from "@/lib/books/ai-review-eligibility";
+import type { AiReviewEligibilityStats } from "@/lib/books/ai-review-eligibility";
 
 export function AiReviewPreviewDialog({
   bookId,
@@ -22,6 +24,7 @@ export function AiReviewPreviewDialog({
   loading,
   progress = 0,
   progressMessage,
+  eligibility,
   onOpenChange,
   onApplied,
 }: {
@@ -31,6 +34,7 @@ export function AiReviewPreviewDialog({
   loading?: boolean;
   progress?: number;
   progressMessage?: string;
+  eligibility?: AiReviewEligibilityStats | null;
   onOpenChange: (open: boolean) => void;
   onApplied: (applied: number) => void;
 }) {
@@ -153,10 +157,39 @@ export function AiReviewPreviewDialog({
             </p>
           )}
           {!loading && proposals.length === 0 && (
-            <p className="p-6 text-body-sm text-slate">
-              No lines matched your scope and filters. Try a different chapter or
-              enable re-check of uncertain AI-reviewed lines.
-            </p>
+            <div className="p-6 text-body-sm text-slate space-y-2">
+              <p>
+                Claude had no lines to review in this run — not necessarily a
+                bug.
+              </p>
+              {eligibility ? (
+                <p className="text-ink/90">{describeAiEligibility(eligibility)}</p>
+              ) : (
+                <p>
+                  Try a different chapter, or enable re-check of uncertain
+                  AI-reviewed lines in the setup dialog.
+                </p>
+              )}
+              {eligibility && eligibility.flagged_count > 0 && (
+                <ul className="list-disc pl-5 space-y-1 text-xs">
+                  <li>
+                    {eligibility.flagged_count.toLocaleString()} flagged in book
+                  </li>
+                  <li>
+                    {eligibility.flagged_not_ai_reviewed.toLocaleString()} not
+                    yet AI-reviewed
+                  </li>
+                  <li>
+                    {eligibility.ai_reviewed_still_flagged.toLocaleString()}{" "}
+                    AI-reviewed but still flagged
+                  </li>
+                  <li>
+                    {eligibility.human_reviewed_flagged.toLocaleString()}{" "}
+                    human-reviewed (skipped by AI)
+                  </li>
+                </ul>
+              )}
+            </div>
           )}
           {!loading &&
             proposals.map((p) => (

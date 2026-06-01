@@ -34,6 +34,7 @@ import { BookStatusBadge, CastStatusBadge } from "@/lib/books/status-badge";
 import { runBatchAiReviewPreview } from "@/lib/books/run-ai-review-client";
 import { AiReviewPreviewDialog } from "@/components/books/ai-review-preview-dialog";
 import type { AiReviewProposal } from "@/lib/books/ai-review-proposals";
+import type { AiReviewEligibilityStats } from "@/lib/books/ai-review-eligibility";
 import type { BookChapterRow } from "@/lib/books/book-chapters";
 import { VoicePickerDialog } from "@/components/voice-picker-dialog";
 import { CharacterLinesDialog } from "@/components/books/character-lines-dialog";
@@ -103,6 +104,9 @@ export function BookDetailClient({
   const [aiPreviewOpen, setAiPreviewOpen] = useState(false);
   const [aiPreviewLoading, setAiPreviewLoading] = useState(false);
   const [aiProposals, setAiProposals] = useState<AiReviewProposal[]>([]);
+  const [aiEligibility, setAiEligibility] =
+    useState<AiReviewEligibilityStats | null>(null);
+  const [aiEligibilitySummary, setAiEligibilitySummary] = useState("");
 
   const displayTitle = displayBookTitle(book.title);
   const seriesVoiceAssignments = useMemo(
@@ -115,6 +119,34 @@ export function BookDetailClient({
       setAnalyzing(true);
     }
   }, [book.status]);
+
+  useEffect(() => {
+    if (!aiReviewOpen) return;
+    let cancelled = false;
+    const params = new URLSearchParams();
+    if (aiIncludeReviewed) params.set("include_ai_reviewed", "1");
+    if (aiScope !== "flagged") params.set("chapter_id", aiScope);
+    void fetch(`/api/books/${bookId}/ai-review/eligibility?${params}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        setAiEligibility(data as AiReviewEligibilityStats);
+        setAiEligibilitySummary(
+          typeof (data as { summary?: string }).summary === "string"
+            ? (data as { summary: string }).summary
+            : ""
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAiEligibility(null);
+          setAiEligibilitySummary("");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [aiReviewOpen, aiScope, aiIncludeReviewed, bookId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -225,9 +257,10 @@ export function BookDetailClient({
       );
 
       setAiProposals(result.proposals);
+      setAiEligibility(result.eligibility ?? null);
       setAiPreviewLoading(false);
       if (result.proposals.length === 0) {
-        toast.message("No speaker changes suggested for this scope");
+        toast.message("No lines for Claude to review in this scope");
       }
     } catch (e) {
       setAiPreviewOpen(false);
@@ -793,7 +826,12 @@ export function BookDetailClient({
                 {flaggedCount > 0 && (
                   <p className="text-bone/80">
                     {flaggedCount.toLocaleString()} line
-                    {flaggedCount === 1 ? "" : "s"} currently flagged.
+                    {flaggedCount === 1 ? "" : "s"} currently flagged in the book.
+                  </p>
+                )}
+                {aiEligibilitySummary && (
+                  <p className="text-bone/80 border-t border-bone/20 pt-2 mt-2">
+                    {aiEligibilitySummary}
                   </p>
                 )}
               </div>
@@ -850,6 +888,7 @@ export function BookDetailClient({
         loading={aiPreviewLoading}
         progress={aiReviewProgress}
         progressMessage={aiReviewMessage}
+        eligibility={aiEligibility}
         onOpenChange={setAiPreviewOpen}
         onApplied={handleAiApplied}
       />

@@ -1,4 +1,5 @@
 import type { AiReviewProposal } from "@/lib/books/ai-review-proposals";
+import type { AiReviewEligibilityStats } from "@/lib/books/ai-review-eligibility";
 import type { AiReviewScope } from "@/lib/books/ai-review-scope";
 import type { BookChapterRow } from "@/lib/books/book-chapters";
 
@@ -25,6 +26,7 @@ export async function runBatchAiReviewPreview(
   proposals: AiReviewProposal[];
   errors: string[];
   api_calls: number;
+  eligibility?: AiReviewEligibilityStats;
 }> {
   let hasMore = true;
   let batch = 0;
@@ -32,6 +34,7 @@ export async function runBatchAiReviewPreview(
   const allProposals: AiReviewProposal[] = [];
   const allErrors: string[] = [];
   let apiCalls = 0;
+  let lastEligibility: AiReviewEligibilityStats | undefined;
 
   onProgress?.({
     message: "Connecting to Claude…",
@@ -90,6 +93,8 @@ export async function runBatchAiReviewPreview(
     }
 
     apiCalls += (data as { api_calls?: number }).api_calls ?? 0;
+    lastEligibility = (data as { eligibility?: AiReviewEligibilityStats })
+      .eligibility;
     hasMore = (data as { has_more?: boolean }).has_more ?? false;
     processedIndices =
       (data as { processed_indices?: number[] }).processed_indices ??
@@ -132,7 +137,12 @@ export async function runBatchAiReviewPreview(
     pending: allProposals.length,
   });
 
-  return { proposals: allProposals, errors: allErrors, api_calls: apiCalls };
+  return {
+    proposals: allProposals,
+    errors: allErrors,
+    api_calls: apiCalls,
+    eligibility: lastEligibility,
+  };
 }
 
 export async function runBatchAiReview(
