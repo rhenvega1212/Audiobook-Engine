@@ -107,10 +107,10 @@ export function CharacterCastActions({
           <Button
             variant="outline"
             size="sm"
-            className="h-7 w-full text-[11px] px-2 justify-between"
+            className="h-7 shrink-0 whitespace-nowrap text-[11px] px-2 gap-1.5"
           >
             Actions
-            <ChevronDown className="h-3 w-3 opacity-60" />
+            <ChevronDown className="h-3 w-3 opacity-60 shrink-0" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-48">

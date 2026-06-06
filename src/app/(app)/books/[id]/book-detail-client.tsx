@@ -506,25 +506,22 @@ export function BookDetailClient({
       <div className="grid gap-8 lg:grid-cols-3">
         <div className="min-w-0 lg:col-span-2">
           <h2 className="font-serif text-h2 mb-4">Detected characters</h2>
-          <Table scrollable={false} className="table-fixed text-xs">
+          <Table scrollable className="table-fixed text-xs min-w-[36rem]">
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[15%] px-2 h-8 text-[10px]">
+                <TableHead className="w-[16%] px-2 h-8 text-[10px]">
                   Character
                 </TableHead>
                 <TableHead className="w-[8%] px-2 h-8 text-[10px]">
                   Lines
                 </TableHead>
-                <TableHead className="w-[26%] px-2 h-8 text-[10px]">
+                <TableHead className="w-[30%] px-2 h-8 text-[10px]">
                   Sample
                 </TableHead>
-                <TableHead className="w-[20%] px-2 h-8 text-[10px]">
+                <TableHead className="w-[24%] px-2 h-8 text-[10px]">
                   Voice
                 </TableHead>
-                <TableHead className="w-[12%] px-2 h-8 text-[10px]">
-                  Status
-                </TableHead>
-                <TableHead className="w-[12%] px-2 h-8 text-[10px]">
+                <TableHead className="w-[22%] px-2 h-8 text-[10px] text-right">
                   Actions
                 </TableHead>
               </TableRow>
@@ -532,7 +529,7 @@ export function BookDetailClient({
             <TableBody>
               {detectedCharacters.map((d) => (
                 <TableRow key={d.name}>
-                  <TableCell className="px-2 py-2 font-serif text-xs align-top">
+                  <TableCell className="px-2 py-2 font-serif text-xs align-middle">
                     <span className="block truncate" title={d.name}>
                       {d.name}
                     </span>
@@ -542,7 +539,7 @@ export function BookDetailClient({
                       </p>
                     )}
                   </TableCell>
-                  <TableCell className="px-2 py-2 font-mono text-xs tabular-nums align-top">
+                  <TableCell className="px-2 py-2 font-mono text-xs tabular-nums align-middle whitespace-nowrap">
                     <button
                       type="button"
                       onClick={() => setLinesCharacter(d.name)}
@@ -553,7 +550,7 @@ export function BookDetailClient({
                     </button>
                   </TableCell>
                   <TableCell
-                    className="px-2 py-2 font-serif text-[11px] italic text-slate align-top"
+                    className="px-2 py-2 font-serif text-[11px] italic text-slate align-middle"
                     title={d.sample_lines[0]}
                   >
                     <span className="line-clamp-2 break-words">
@@ -561,7 +558,7 @@ export function BookDetailClient({
                     </span>
                   </TableCell>
                   <TableCell
-                    className="px-2 py-2 text-xs align-top"
+                    className="px-2 py-2 text-xs align-middle"
                     title={d.voice_name ?? undefined}
                   >
                     {d.voice_name ? (
@@ -572,18 +569,20 @@ export function BookDetailClient({
                       <span className="text-slate">—</span>
                     )}
                   </TableCell>
-                  <TableCell className="px-2 py-2 align-top">
-                    <CastStatusBadge status={d.match_status} />
-                  </TableCell>
-                  <TableCell className="px-2 py-2 align-top">
-                    <CharacterCastActions
-                      bookId={bookId}
-                      detected={d}
-                      roster={roster}
-                      onCast={() => openPicker(d)}
-                      onViewLines={() => setLinesCharacter(d.name)}
-                      onMerged={() => router.refresh()}
-                    />
+                  <TableCell className="px-2 py-2 align-middle">
+                    <div className="flex items-center justify-end gap-2 flex-wrap">
+                      <span className="shrink-0">
+                        <CastStatusBadge status={d.match_status} />
+                      </span>
+                      <CharacterCastActions
+                        bookId={bookId}
+                        detected={d}
+                        roster={roster}
+                        onCast={() => openPicker(d)}
+                        onViewLines={() => setLinesCharacter(d.name)}
+                        onMerged={() => router.refresh()}
+                      />
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
