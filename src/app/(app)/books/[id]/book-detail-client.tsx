@@ -38,6 +38,7 @@ import type { AiReviewEligibilityStats } from "@/lib/books/ai-review-eligibility
 import type { BookChapterRow } from "@/lib/books/book-chapters";
 import { VoicePickerDialog } from "@/components/voice-picker-dialog";
 import { CharacterLinesDialog } from "@/components/books/character-lines-dialog";
+import { CharacterCastActions } from "@/components/books/character-cast-actions";
 import type { BookStatus, Character } from "@/lib/types/database";
 import { voiceAssignmentsFromCharacters } from "@/lib/elevenlabs/voice-picker-utils";
 import { displayBookTitle } from "@/lib/books/display-title";
@@ -88,7 +89,6 @@ export function BookDetailClient({
   const [analyzing, setAnalyzing] = useState(book.status === "analyzing");
   const [analyzeProgress, setAnalyzeProgress] = useState(0);
   const [analyzeStage, setAnalyzeStage] = useState(0);
-  const [mergeTarget, setMergeTarget] = useState<Record<string, string>>({});
   const [aiReviewLoading, setAiReviewLoading] = useState(false);
   const [aiReviewProgress, setAiReviewProgress] = useState(0);
   const [aiReviewMessage, setAiReviewMessage] = useState("");
@@ -304,30 +304,6 @@ export function BookDetailClient({
     } finally {
       setAiUndoBusy(false);
     }
-  }
-
-  async function mergeAlias(detected: DetectedCharacter) {
-    const targetId =
-      mergeTarget[detected.name] ?? detected.matched_character_id ?? undefined;
-    if (!targetId) {
-      toast.error("Choose a character to merge into");
-      return;
-    }
-    const res = await fetch(`/api/books/${bookId}/merge-alias`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        alias_name: detected.name,
-        target_character_id: targetId,
-      }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      toast.error((err as { error?: string }).error ?? "Merge failed");
-      return;
-    }
-    toast.success(`Merged "${detected.name}" into roster`);
-    router.refresh();
   }
 
   function openPicker(detected: DetectedCharacter) {
@@ -548,7 +524,9 @@ export function BookDetailClient({
                 <TableHead className="w-[12%] px-2 h-8 text-[10px]">
                   Status
                 </TableHead>
-                <TableHead className="w-[19%] px-2 h-8 text-[10px]"></TableHead>
+                <TableHead className="w-[12%] px-2 h-8 text-[10px]">
+                  Actions
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -597,49 +575,15 @@ export function BookDetailClient({
                   <TableCell className="px-2 py-2 align-top">
                     <CastStatusBadge status={d.match_status} />
                   </TableCell>
-                  <TableCell className="px-2 py-2 align-top space-y-1.5">
-                    {(d.match_status === "possible_alias" ||
-                      d.match_status === "new") && (
-                      <div className="flex flex-col gap-1">
-                        <Select
-                          value={
-                            mergeTarget[d.name] ?? d.matched_character_id ?? ""
-                          }
-                          onValueChange={(v) =>
-                            setMergeTarget((m) => ({ ...m, [d.name]: v }))
-                          }
-                        >
-                          <SelectTrigger className="h-7 w-full text-[11px] px-2">
-                            <SelectValue placeholder="Merge into…" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {roster.map((c) => (
-                              <SelectItem key={c.id} value={c.id}>
-                                {c.canonical_name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          className="h-7 text-[11px] px-2"
-                          onClick={() => mergeAlias(d)}
-                        >
-                          Merge
-                        </Button>
-                      </div>
-                    )}
-                    <Button
-                      size="sm"
-                      variant={
-                        d.match_status === "cast" ? "outline" : "default"
-                      }
-                      className="h-7 text-[11px] px-2 w-full"
-                      onClick={() => openPicker(d)}
-                    >
-                      {d.match_status === "cast" ? "Edit voice" : "Cast voice"}
-                    </Button>
+                  <TableCell className="px-2 py-2 align-top">
+                    <CharacterCastActions
+                      bookId={bookId}
+                      detected={d}
+                      roster={roster}
+                      onCast={() => openPicker(d)}
+                      onViewLines={() => setLinesCharacter(d.name)}
+                      onMerged={() => router.refresh()}
+                    />
                   </TableCell>
                 </TableRow>
               ))}
