@@ -10,11 +10,14 @@ import {
   LogOut,
   Menu,
   Shield,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { useSidebar } from "./sidebar-context";
 
 const navItems = [
   { href: "/dashboard", label: "Books", icon: BookOpen },
@@ -27,6 +30,53 @@ function isNavActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(href + "/");
 }
 
+function SidebarToggleButton({
+  collapsed,
+  onToggle,
+  className,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+  className?: string;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      className={cn("h-8 w-8 shrink-0 text-slate hover:text-ink", className)}
+      onClick={onToggle}
+      title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+      aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+    >
+      {collapsed ? (
+        <PanelLeftOpen className="h-4 w-4" />
+      ) : (
+        <PanelLeftClose className="h-4 w-4" />
+      )}
+    </Button>
+  );
+}
+
+export function SidebarExpandButton() {
+  const { collapsed, toggle, hydrated } = useSidebar();
+  if (!hydrated || !collapsed) return null;
+
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="icon"
+      className="absolute left-0 top-20 z-30 hidden h-8 w-8 -translate-x-1/2 rounded-full border-border bg-bone shadow-sm lg:flex"
+      onClick={toggle}
+      title="Expand sidebar"
+      aria-label="Expand sidebar"
+    >
+      <PanelLeftOpen className="h-4 w-4" />
+    </Button>
+  );
+}
+
 export function SidebarDesktop({
   userEmail,
   showTeamAccess = false,
@@ -36,6 +86,8 @@ export function SidebarDesktop({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { collapsed, toggle, hydrated } = useSidebar();
+  const isCollapsed = hydrated && collapsed;
 
   async function handleLogout() {
     const supabase = createClient();
@@ -45,60 +97,110 @@ export function SidebarDesktop({
   }
 
   return (
-    <aside className="hidden lg:flex lg:w-60 lg:shrink-0 lg:flex-col lg:border-r lg:border-border lg:bg-bone">
-      <div className="flex h-16 items-center border-b border-border px-6">
-        <Link
-          href="/dashboard"
-          className="font-serif text-xl font-semibold tracking-tight text-burgundy"
-        >
-          Audiobook Engine
-        </Link>
+    <aside
+      className={cn(
+        "hidden lg:flex lg:shrink-0 lg:flex-col lg:border-r lg:border-border lg:bg-bone transition-[width] duration-200 ease-in-out",
+        isCollapsed ? "lg:w-16" : "lg:w-60"
+      )}
+    >
+      <div
+        className={cn(
+          "flex h-16 items-center border-b border-border",
+          isCollapsed ? "justify-center px-2" : "justify-between px-4"
+        )}
+      >
+        {isCollapsed ? (
+          <Link
+            href="/dashboard"
+            className="font-serif text-sm font-semibold text-burgundy"
+            title="Audiobook Engine"
+          >
+            AE
+          </Link>
+        ) : (
+          <Link
+            href="/dashboard"
+            className="min-w-0 truncate font-serif text-xl font-semibold tracking-tight text-burgundy"
+          >
+            Audiobook Engine
+          </Link>
+        )}
+        {!isCollapsed && (
+          <SidebarToggleButton collapsed={false} onToggle={toggle} />
+        )}
       </div>
-      <nav className="flex flex-1 flex-col gap-1 p-4">
+      <nav className={cn("flex flex-1 flex-col gap-1 p-2", !isCollapsed && "p-4")}>
         {navItems.map((item) => {
           const active = isNavActive(pathname, item.href);
           return (
             <Link
               key={item.href}
               href={item.href}
+              title={item.label}
               className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                "flex items-center rounded-md py-2 text-sm font-medium transition-colors",
+                isCollapsed ? "justify-center px-2" : "gap-3 px-3",
                 active
                   ? "bg-burgundy text-bone"
                   : "text-slate hover:bg-warm-sand hover:text-ink"
               )}
             >
               <item.icon className="h-4 w-4 shrink-0" />
-              {item.label}
+              {!isCollapsed && item.label}
             </Link>
           );
         })}
         {showTeamAccess && (
           <Link
             href="/admin/users"
+            title="Team access"
             className={cn(
-              "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+              "flex items-center rounded-md py-2 text-sm font-medium transition-colors",
+              isCollapsed ? "justify-center px-2" : "gap-3 px-3",
               isNavActive(pathname, "/admin")
                 ? "bg-burgundy text-bone"
                 : "text-slate hover:bg-warm-sand hover:text-ink"
             )}
           >
             <Shield className="h-4 w-4 shrink-0" />
-            Team access
+            {!isCollapsed && "Team access"}
           </Link>
         )}
       </nav>
-      <div className="border-t border-border p-4">
-        <p className="truncate text-body-sm text-slate mb-2">{userEmail}</p>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="w-full justify-start gap-2"
-          onClick={handleLogout}
-        >
-          <LogOut className="h-4 w-4" />
-          Sign out
-        </Button>
+      <div
+        className={cn(
+          "border-t border-border",
+          isCollapsed ? "flex flex-col items-center gap-2 p-2" : "p-4"
+        )}
+      >
+        {!isCollapsed && (
+          <p className="truncate text-body-sm text-slate mb-2">{userEmail}</p>
+        )}
+        {isCollapsed ? (
+          <>
+            <SidebarToggleButton collapsed onToggle={toggle} />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-slate hover:text-ink"
+              onClick={handleLogout}
+              title="Sign out"
+              aria-label="Sign out"
+            >
+              <LogOut className="h-4 w-4" />
+            </Button>
+          </>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full justify-start gap-2"
+            onClick={handleLogout}
+          >
+            <LogOut className="h-4 w-4" />
+            Sign out
+          </Button>
+        )}
       </div>
     </aside>
   );
