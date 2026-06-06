@@ -1,4 +1,7 @@
-import { lineNeedsAiPass, type TaggedLineForAi } from "@/lib/engine/ai-attribution";
+import {
+  lineNeedsAiPass,
+  type TaggedLineForAi,
+} from "@/lib/engine/ai-line-eligibility";
 import {
   type AiReviewScope,
   eligibleLineIndices,
