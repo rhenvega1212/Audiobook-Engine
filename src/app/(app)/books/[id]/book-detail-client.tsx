@@ -570,10 +570,10 @@ export function BookDetailClient({
                     )}
                   </TableCell>
                   <TableCell className="px-2 py-2 align-middle">
-                    <div className="flex items-center justify-end gap-2 flex-wrap">
-                      <span className="shrink-0">
+                    <div className="flex items-center justify-end gap-2 flex-nowrap">
+                      <div className="w-[5.5rem] shrink-0 flex justify-end">
                         <CastStatusBadge status={d.match_status} />
-                      </span>
+                      </div>
                       <CharacterCastActions
                         bookId={bookId}
                         detected={d}

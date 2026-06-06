@@ -6,6 +6,7 @@ import { fetchSourceParagraphs } from "@/lib/books/manuscript-source";
 import { notFound } from "next/navigation";
 import { displayBookTitle } from "@/lib/books/display-title";
 import { findCharacterBySpeaker } from "@/lib/characters/resolve-character";
+import { voicePlaybackFromCharacter } from "@/lib/elevenlabs/voice-cast";
 import type { Character } from "@/lib/types/database";
 import { ManuscriptStudioClient } from "./manuscript-studio-client";
 import type { ManuscriptLine } from "@/lib/manuscript/types";
@@ -80,6 +81,7 @@ export default async function ManuscriptStudioPage({
     speaker_label: string;
     line_text: string;
     flag_reason: string | null;
+    human_reviewed?: boolean;
     speaker_character_id: string | null;
     excluded_from_export?: boolean;
   }[];
@@ -88,13 +90,13 @@ export default async function ManuscriptStudioPage({
     dbLines = await fetchAllTaggedLines(
       supabase,
       id,
-      "id, line_order, paragraph_num, speaker_label, line_text, flag_reason, speaker_character_id, excluded_from_export"
+      "id, line_order, paragraph_num, speaker_label, line_text, flag_reason, human_reviewed, speaker_character_id, excluded_from_export"
     );
   } catch {
     dbLines = await fetchAllTaggedLines(
       supabase,
       id,
-      "id, line_order, paragraph_num, speaker_label, line_text, flag_reason, speaker_character_id"
+      "id, line_order, paragraph_num, speaker_label, line_text, flag_reason, human_reviewed, speaker_character_id"
     );
   }
 
@@ -110,9 +112,11 @@ export default async function ManuscriptStudioPage({
       speaker_character_id: l.speaker_character_id,
       line_text: l.line_text,
       flag_reason: l.flag_reason,
+      human_reviewed: l.human_reviewed ?? false,
       excluded_from_export: l.excluded_from_export ?? false,
       voice_id: char?.elevenlabs_voice_id ?? null,
       voice_name: char?.elevenlabs_voice_name ?? null,
+      voice_playback: voicePlaybackFromCharacter(char),
     };
   });
 

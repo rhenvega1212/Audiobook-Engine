@@ -7,6 +7,7 @@ import {
   type TextSelectionPayload,
 } from "@/lib/manuscript/text-selection";
 import type { ManuscriptLine } from "@/lib/manuscript/types";
+import { lineNeedsHumanReview } from "@/lib/books/flagged-lines";
 import { Button } from "@/components/ui/button";
 import {
   SpeakerSelect,
@@ -67,7 +68,7 @@ export function ManuscriptLineRow({
     line.speaker_character_id,
     characters as SpeakerCharacter[]
   );
-  const isFlagged = !!line.flag_reason;
+  const isFlagged = lineNeedsHumanReview(line);
   const excluded = line.excluded_from_export;
 
   return (

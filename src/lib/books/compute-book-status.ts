@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { BookStatus } from "@/lib/types/database";
+import { lineNeedsHumanReview } from "@/lib/books/flagged-lines";
 
 export async function computeBookStatus(
   admin: SupabaseClient,
@@ -34,13 +35,13 @@ export async function computeBookStatus(
     castRows.length > 0 &&
     castRows.every((c) => c && c.elevenlabs_voice_id);
 
-  const { count: flaggedCount } = await admin
+  const { data: flaggedLines } = await admin
     .from("tagged_lines")
-    .select("*", { count: "exact", head: true })
+    .select("flag_reason, human_reviewed")
     .eq("book_id", bookId)
     .not("flag_reason", "is", null);
 
-  const hasFlags = (flaggedCount ?? 0) > 0;
+  const hasFlags = (flaggedLines ?? []).some((l) => lineNeedsHumanReview(l));
 
   if (!allCast) return "needs_casting";
   if (hasFlags) return "reviewing";

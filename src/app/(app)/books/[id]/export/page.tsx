@@ -4,6 +4,8 @@ import { notFound } from "next/navigation";
 import { displayBookTitle } from "@/lib/books/display-title";
 import { ExportClient } from "./export-client";
 import { resolveSpokenLine } from "@/lib/pronunciation/apply";
+import { formatVoiceCastSummary } from "@/lib/elevenlabs/voice-cast";
+import type { Character } from "@/lib/types/database";
 
 export default async function ExportPage({
   params,
@@ -52,10 +54,10 @@ export default async function ExportPage({
 
   const { data: characters } = await supabase
     .from("characters")
-    .select("id, canonical_name, elevenlabs_voice_name")
+    .select("*")
     .eq("series_id", book.series_id);
 
-  const roster = characters ?? [];
+  const roster = (characters ?? []) as Character[];
   const exportable = dbLines.filter((l) => !l.excluded_from_export);
   const excludedCount = dbLines.length - exportable.length;
 
@@ -71,7 +73,7 @@ export default async function ExportPage({
         const char = roster.find((c) => c.id === l.speaker_character_id);
         return {
           speaker: l.speaker_label,
-          voice: char?.elevenlabs_voice_name ?? "—",
+          voice: char ? formatVoiceCastSummary(char) : "—",
           line: resolveSpokenLine(l.line_text, l.spoken_text, dict).slice(0, 100),
         };
       })}

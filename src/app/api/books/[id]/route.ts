@@ -3,7 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
 import { requireUser } from "@/lib/api/auth";
-import { resolveMatchStatus, type DetectedCharacter } from "@/lib/characters/match-status";
+import { buildDetectedCharacters } from "@/lib/books/detected-characters";
+import { countUnresolvedFlags } from "@/lib/books/flagged-lines";
 import type { Character } from "@/lib/types/database";
 
 export async function GET(
@@ -31,62 +32,14 @@ export async function GET(
     .select("*")
     .eq("series_id", book.series_id);
 
-  const { data: bookChars } = await supabase
-    .from("book_characters")
-    .select("*, characters(*)")
-    .eq("book_id", id);
-
   const lines = await fetchAllTaggedLines(supabase, id, "*");
 
-  const flaggedCount = lines.filter((l) => l.flag_reason).length;
+  const flaggedCount = countUnresolvedFlags(lines);
 
-  const detectedMap = new Map<string, { count: number; samples: string[] }>();
-
-  for (const bc of bookChars ?? []) {
-    const char = bc.characters as Character | null;
-    const name = char?.canonical_name ?? "Unknown";
-    if (!detectedMap.has(name)) {
-      detectedMap.set(name, { count: bc.line_count, samples: [] });
-    }
-  }
-
-  for (const line of lines) {
-    if (line.speaker_label === "Narrator") continue;
-    const entry = detectedMap.get(line.speaker_label) ?? {
-      count: 0,
-      samples: [],
-    };
-    entry.count += 1;
-    if (
-      entry.samples.length < 3 &&
-      line.line_text.length > 0 &&
-      line.speaker_label !== "UNKNOWN"
-    ) {
-      entry.samples.push(line.line_text.slice(0, 120));
-    }
-    detectedMap.set(line.speaker_label, entry);
-  }
-
-  const detected_characters: DetectedCharacter[] = [];
-
-  for (const [name, { count, samples }] of detectedMap) {
-    const { status, character, suggestedAliasOf } = resolveMatchStatus(
-      name,
-      (roster ?? []) as Character[]
-    );
-    detected_characters.push({
-      name,
-      line_count: count,
-      sample_lines: samples,
-      match_status: status,
-      matched_character_id: character?.id ?? null,
-      matched_character_name: character?.canonical_name ?? null,
-      suggested_alias_of: suggestedAliasOf,
-      voice_name: character?.elevenlabs_voice_name ?? null,
-    });
-  }
-
-  detected_characters.sort((a, b) => b.line_count - a.line_count);
+  const detected_characters = buildDetectedCharacters(
+    lines,
+    (roster ?? []) as Character[]
+  );
 
   return NextResponse.json({
     book,

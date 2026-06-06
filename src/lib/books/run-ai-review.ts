@@ -397,7 +397,8 @@ export async function runAiReviewForBook(
       .from("tagged_lines")
       .select("*", { count: "exact", head: true })
       .eq("book_id", bookId)
-      .not("flag_reason", "is", null),
+      .not("flag_reason", "is", null)
+      .eq("human_reviewed", false),
   ]);
 
   return {

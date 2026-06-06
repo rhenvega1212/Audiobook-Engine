@@ -16,7 +16,8 @@ import {
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { TaggedLine } from "@/lib/types/database";
+import type { TaggedLine, Character } from "@/lib/types/database";
+import { voicePlaybackFromCharacter } from "@/lib/elevenlabs/voice-cast";
 import { useLineAudioPlayer } from "@/components/audio/line-player";
 import { PerformLineRecorder } from "@/components/audio/perform-line-recorder";
 import { resolveSpokenLine, type PronunciationEntry } from "@/lib/pronunciation/apply";
@@ -352,6 +353,14 @@ export function LineReviewClient({
     voiceBySpeaker[current?.speaker_label ?? ""] ??
     null;
 
+  const currentCharacter =
+    characters.find((c) => c.id === speakerId) ??
+    characters.find((c) => c.canonical_name === current?.speaker_label);
+
+  const currentVoicePlayback = voicePlaybackFromCharacter(
+    currentCharacter as Character | undefined
+  );
+
   const currentVoiceName =
     characters.find((c) => c.id === speakerId)?.elevenlabs_voice_name ??
     characters.find((c) => c.canonical_name === current?.speaker_label)
@@ -430,7 +439,12 @@ export function LineReviewClient({
             size="sm"
             disabled={!currentVoiceId || loadingId !== null}
             onClick={() =>
-              playLine(current.id, currentVoiceId ?? "", currentSpoken)
+              playLine(
+                current.id,
+                currentVoiceId ?? "",
+                currentSpoken,
+                currentVoicePlayback ?? undefined
+              )
             }
           >
             {loadingId === current.id ? "Generating…" : playingId === current.id ? "Playing…" : "Listen to line"}

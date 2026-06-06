@@ -58,7 +58,8 @@ export async function GET(
     .from("tagged_lines")
     .select("*", { count: "exact", head: true })
     .eq("book_id", id)
-    .not("flag_reason", "is", null);
+    .not("flag_reason", "is", null)
+    .eq("human_reviewed", false);
 
   const speakersInBook = new Set(
     lines.map((l) => l.speaker_label).filter((s) => s !== "UNKNOWN")

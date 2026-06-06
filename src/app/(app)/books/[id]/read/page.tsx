@@ -38,6 +38,7 @@ export default async function ReadPage({
     .select("id")
     .eq("book_id", id)
     .not("flag_reason", "is", null)
+    .eq("human_reviewed", false)
     .order("line_order")
     .limit(1)
     .maybeSingle();

@@ -5,6 +5,7 @@ import { displayBookTitle } from "@/lib/books/display-title";
 import { PronunciationProofreadClient } from "./pronunciation-proofread-client";
 import { applyPronunciations } from "@/lib/pronunciation/apply";
 import { findCharacterBySpeaker } from "@/lib/characters/resolve-character";
+import { voicePlaybackFromCharacter } from "@/lib/elevenlabs/voice-cast";
 import type { Character } from "@/lib/types/database";
 
 export const dynamic = "force-dynamic";
@@ -68,6 +69,7 @@ export default async function PronunciationPage({
       has_override: hasOverride,
       voice_id: char?.elevenlabs_voice_id ?? null,
       voice_name: char?.elevenlabs_voice_name ?? null,
+      voice_playback: voicePlaybackFromCharacter(char),
     };
   });
 

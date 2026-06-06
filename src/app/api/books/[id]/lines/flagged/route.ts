@@ -24,6 +24,7 @@ export async function GET(
         .select("id, line_order, speaker_label")
         .eq("book_id", id)
         .not("flag_reason", "is", null)
+        .eq("human_reviewed", false)
         .order("line_order")
         .range(from, to);
       return { data, error: dbError };

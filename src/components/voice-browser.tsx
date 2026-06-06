@@ -6,18 +6,21 @@ import { Download, Loader2, Play, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { SearchableFilterSelect } from "@/components/ui/searchable-select";
+import { cn } from "@/lib/utils";
 import {
   type ElevenVoice,
   type VoiceAssignment,
   voiceUsedByOtherCharacter,
 } from "@/lib/elevenlabs/voice-picker-utils";
+import {
+  VOICE_LIBRARY_ACCENTS,
+  VOICE_LIBRARY_LANGUAGES,
+} from "@/lib/elevenlabs/voice-library-filters";
+import {
+  playVoicePreview,
+  stopVoicePreview,
+} from "@/lib/elevenlabs/voice-preview-player";
 
 type SharedVoice = {
   voice_id: string;
@@ -37,6 +40,7 @@ export function VoiceBrowser({
   onVoicesChange,
   genderDefault = "all",
   compact = false,
+  embedded = false,
   currentCharacterId,
   assignedVoices,
 }: {
@@ -45,6 +49,8 @@ export function VoiceBrowser({
   onVoicesChange?: (voices: ElevenVoice[]) => void;
   genderDefault?: "all" | "male" | "female";
   compact?: boolean;
+  /** Inside cast dialog — shorter list, horizontal filters. */
+  embedded?: boolean;
   /** Character being cast — their current voice stays selectable. */
   currentCharacterId?: string;
   assignedVoices?: VoiceAssignment[];
@@ -52,9 +58,16 @@ export function VoiceBrowser({
   const [tab, setTab] = useState<"mine" | "library">("mine");
   const [search, setSearch] = useState("");
   const [gender, setGender] = useState(genderDefault);
+  const [age, setAge] = useState<"all" | "young" | "middle_aged" | "old">("all");
+  const [language, setLanguage] = useState("all");
+  const [accent, setAccent] = useState("all");
   const [myVoices, setMyVoices] = useState<ElevenVoice[]>([]);
   const [libraryVoices, setLibraryVoices] = useState<SharedVoice[]>([]);
+  const [libraryPage, setLibraryPage] = useState(0);
+  const [libraryHasMore, setLibraryHasMore] = useState(false);
+  const [libraryTotal, setLibraryTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [importing, setImporting] = useState<string | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState<string | null>(null);
@@ -74,28 +87,57 @@ export function VoiceBrowser({
     onVoicesChange?.(voices);
   }, [onVoicesChange]);
 
-  const loadLibrary = useCallback(async (q?: string, g?: string) => {
-    setLoading(true);
-    const params = new URLSearchParams({ page_size: "30" });
-    if (q?.trim()) params.set("search", q.trim());
-    if (g && g !== "all") params.set("gender", g);
-    const res = await fetch(`/api/voices/shared?${params.toString()}`);
-    const data = await res.json();
-    setLoading(false);
-    if (!res.ok) {
-      toast.error(data.error ?? "Library search failed");
-      return;
-    }
-    setLibraryVoices(data.voices ?? []);
-  }, []);
+  const loadLibrary = useCallback(
+    async (
+      q?: string,
+      g?: string,
+      a?: string,
+      lang?: string,
+      acc?: string,
+      page = 0,
+      append = false
+    ) => {
+      if (append) setLoadingMore(true);
+      else setLoading(true);
+
+      const params = new URLSearchParams({ page_size: "100", page: String(page) });
+      if (q?.trim()) params.set("search", q.trim());
+      if (g && g !== "all") params.set("gender", g);
+      if (a && a !== "all") params.set("age", a);
+      if (lang && lang !== "all") params.set("language", lang);
+      if (acc && acc !== "all") params.set("accent", acc);
+
+      const res = await fetch(`/api/voices/shared?${params.toString()}`);
+      const data = await res.json();
+
+      if (append) setLoadingMore(false);
+      else setLoading(false);
+
+      if (!res.ok) {
+        toast.error(data.error ?? "Library search failed");
+        return;
+      }
+
+      const voices: SharedVoice[] = data.voices ?? [];
+      setLibraryVoices((prev) => (append ? [...prev, ...voices] : voices));
+      setLibraryPage(page);
+      setLibraryHasMore(!!data.has_more);
+      setLibraryTotal(
+        typeof data.total_count === "number" ? data.total_count : null
+      );
+    },
+    []
+  );
 
   useEffect(() => {
     const t = setTimeout(() => {
       if (tab === "mine") loadMyVoices(search);
-      else loadLibrary(search, gender);
+      else loadLibrary(search, gender, age, language, accent, 0, false);
     }, search ? 300 : 0);
     return () => clearTimeout(t);
-  }, [search, tab, gender, loadMyVoices, loadLibrary]);
+  }, [search, tab, gender, age, language, accent, loadMyVoices, loadLibrary]);
+
+  useEffect(() => () => stopVoicePreview(), []);
 
   async function playPreview(
     voiceId: string,
@@ -103,36 +145,17 @@ export function VoiceBrowser({
     previewUrl?: string
   ) {
     setPreviewLoading(voiceId);
-    try {
-      if (previewUrl) {
-        const audio = new Audio(previewUrl);
-        setPlaying(voiceId);
-        audio.onended = () => setPlaying(null);
-        await audio.play();
-        return;
-      }
-      const res = await fetch("/api/voices/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          voice_id: voiceId,
-          text: `Hello, I'm ${name}.`,
-        }),
-      });
-      if (!res.ok) throw new Error("Preview failed");
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      setPlaying(voiceId);
-      audio.onended = () => {
-        setPlaying(null);
-        URL.revokeObjectURL(url);
-      };
-      await audio.play();
-    } catch {
+    const ok = await playVoicePreview({
+      voiceId: previewUrl ? undefined : voiceId,
+      name,
+      previewUrl,
+      onStart: () => setPlaying(voiceId),
+      onEnd: () => setPlaying(null),
+    });
+    setPreviewLoading(null);
+    if (!ok) {
+      setPlaying(null);
       toast.error("Could not play preview");
-    } finally {
-      setPreviewLoading(null);
     }
   }
 
@@ -178,8 +201,9 @@ export function VoiceBrowser({
       assignedVoices
     );
     if (used) {
-      toast.message(`Already cast as ${used.character_name}`);
-      return;
+      toast.message(
+        `Also used by ${used.character_name} — set a different style or tuning.`
+      );
     }
     onSelect(voiceId);
   }
@@ -205,14 +229,16 @@ export function VoiceBrowser({
         </Button>
       </div>
 
-      <div className={`flex gap-2 ${compact ? "flex-col" : "flex-wrap items-end"}`}>
-        <div className="flex-1 min-w-[180px]">
-          <Label htmlFor="voice-search">Search</Label>
+      <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
+        <div className={embedded ? "min-w-[140px] flex-1" : "flex-1 min-w-[180px]"}>
+          <Label htmlFor="voice-search" className={compact ? "text-[10px]" : undefined}>
+            Search
+          </Label>
           <div className="relative mt-1">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate" />
             <Input
               id="voice-search"
-              className="pl-8"
+              className={cn("pl-8", compact && "h-8 text-xs")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={
@@ -222,24 +248,81 @@ export function VoiceBrowser({
           </div>
         </div>
         {tab === "library" && (
-          <div>
-            <Label>Gender</Label>
-            <Select
+          <>
+            <SearchableFilterSelect
+              compact={compact}
+              label="Gender"
               value={gender}
               onValueChange={(v) => setGender(v as "all" | "male" | "female")}
-            >
-              <SelectTrigger className="w-32 mt-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                <SelectItem value="female">Female</SelectItem>
-                <SelectItem value="male">Male</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+              options={[
+                { value: "all", label: "All" },
+                { value: "female", label: "Female" },
+                { value: "male", label: "Male" },
+              ]}
+              placeholder="Search gender…"
+              triggerClassName="w-[5.5rem]"
+            />
+            <SearchableFilterSelect
+              compact={compact}
+              label="Age"
+              value={age}
+              onValueChange={(v) =>
+                setAge(v as "all" | "young" | "middle_aged" | "old")
+              }
+              options={[
+                { value: "all", label: "All ages" },
+                { value: "middle_aged", label: "Middle-aged" },
+                { value: "old", label: "Old" },
+                { value: "young", label: "Young" },
+              ]}
+              placeholder="Search age…"
+              triggerClassName="w-[5.75rem]"
+            />
+            <SearchableFilterSelect
+              compact={compact}
+              label="Language"
+              value={language}
+              onValueChange={setLanguage}
+              options={VOICE_LIBRARY_LANGUAGES.map((o) => ({
+                value: o.value,
+                label: o.label,
+              }))}
+              placeholder="Search language…"
+              triggerClassName="w-[6.5rem]"
+            />
+            <SearchableFilterSelect
+              compact={compact}
+              label="Accent"
+              value={accent}
+              onValueChange={setAccent}
+              options={VOICE_LIBRARY_ACCENTS.map((o) => ({
+                value: o.value,
+                label: o.label,
+              }))}
+              placeholder="Search accent…"
+              triggerClassName="w-[6.5rem]"
+            />
+          </>
         )}
       </div>
+
+      {tab === "library" && !loading && libraryTotal != null && (
+        <p className="text-[11px] text-slate">
+          Showing {libraryVoices.length.toLocaleString()} of{" "}
+          {libraryTotal.toLocaleString()} library voice
+          {libraryTotal === 1 ? "" : "s"}
+          {search.trim().includes(" ") &&
+            libraryTotal <= 10 &&
+            " — try fewer words (e.g. “old”) or use the Age filter for broader matches"}
+        </p>
+      )}
+
+      {tab === "mine" && !loading && (
+        <p className="text-[11px] text-slate">
+          My voices searches only voices already in your ElevenLabs account. Use
+          the library tab to browse and import more.
+        </p>
+      )}
 
       {hasAssignedElsewhere && (
         <p className="text-[11px] text-slate">
@@ -247,7 +330,12 @@ export function VoiceBrowser({
         </p>
       )}
 
-      <div className="overflow-y-auto max-h-64 space-y-1 border border-border-muted rounded-md">
+      <div
+        className={cn(
+          "overflow-y-auto space-y-1 border border-border-muted rounded-md",
+          embedded ? "max-h-44" : "max-h-64"
+        )}
+      >
         {loading && (
           <p className="px-3 py-4 text-sm text-slate flex items-center gap-2">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading…
@@ -374,6 +462,36 @@ export function VoiceBrowser({
             );
           })}
       </div>
+
+      {tab === "library" && libraryHasMore && !loading && (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="w-full"
+          disabled={loadingMore}
+          onClick={() =>
+            void loadLibrary(
+              search,
+              gender,
+              age,
+              language,
+              accent,
+              libraryPage + 1,
+              true
+            )
+          }
+        >
+          {loadingMore ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading more…
+            </>
+          ) : (
+            `Load more (${libraryVoices.length.toLocaleString()} of ${(libraryTotal ?? libraryVoices.length).toLocaleString()})`
+          )}
+        </Button>
+      )}
     </div>
   );
 }

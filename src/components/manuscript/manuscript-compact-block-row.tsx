@@ -10,6 +10,7 @@ import {
 import { CompactSpeakerBlock } from "@/components/manuscript/compact-speaker-block";
 import type { Character } from "@/lib/types/database";
 import type { ManuscriptLine } from "@/lib/manuscript/types";
+import { lineNeedsHumanReview } from "@/lib/books/flagged-lines";
 import type { SpeakerBlock } from "@/lib/manuscript/group-lines";
 
 export function ManuscriptCompactBlockRow({
@@ -54,7 +55,7 @@ export function ManuscriptCompactBlockRow({
     characters as SpeakerCharacter[]
   );
   const excluded = block.lines.every((l) => l.excluded_from_export);
-  const flagged = block.lines.some((l) => l.flag_reason);
+  const flagged = block.lines.some((l) => lineNeedsHumanReview(l));
   const lineRange = `#${block.first_line_order.toLocaleString()}–${block.last_line_order.toLocaleString()}`;
 
   return (

@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "WATCHPACK_POLLING=true next dev",
-    "dev:clean": "rm -rf .next && WATCHPACK_POLLING=true next dev",
+    "dev": "WATCHPACK_POLLING=true next dev -p 3001",
+    "dev:clean": "rm -rf .next && WATCHPACK_POLLING=true next dev -p 3001",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

@@ -22,6 +22,8 @@ const BLOCKLIST = new Set([
   "as",
   "at",
   "because",
+  "bellisima",
+  "bellissima",
   "besides",
   "but",
   "caf",

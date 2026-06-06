@@ -34,6 +34,15 @@ export function voiceUsedByOtherCharacter(
   currentCharacterId: string,
   assigned: VoiceAssignment[] | undefined
 ): VoiceAssignment | undefined {
+  return voiceSharedWithOtherCharacter(voiceId, currentCharacterId, assigned);
+}
+
+/** Same voice on multiple characters is allowed (e.g. Derek & Marty both use Adam). */
+export function voiceSharedWithOtherCharacter(
+  voiceId: string,
+  currentCharacterId: string,
+  assigned: VoiceAssignment[] | undefined
+): VoiceAssignment | undefined {
   if (!assigned?.length) return undefined;
   return assigned.find(
     (a) => a.voice_id === voiceId && a.character_id !== currentCharacterId

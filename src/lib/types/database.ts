@@ -29,6 +29,14 @@ export type CharacterRole =
   | "recurring"
   | "guest";
 
+export type VoiceSettings = {
+  stability?: number;
+  similarity_boost?: number;
+  style?: number;
+  speed?: number;
+  use_speaker_boost?: boolean;
+};
+
 export type Character = {
   id: string;
   series_id: string;
@@ -40,6 +48,10 @@ export type Character = {
   elevenlabs_voice_id: string | null;
   elevenlabs_voice_name: string | null;
   voice_style: string | null;
+  voice_accent: string | null;
+  voice_locale: string | null;
+  voice_language: string | null;
+  voice_settings: VoiceSettings | null;
   voice_notes: string | null;
   created_at: string;
   updated_at: string;

@@ -1,9 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronDown, Loader2 } from "lucide-react";
+import { Check, ChevronDown, Loader2, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -18,15 +20,15 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 import type { DetectedCharacter } from "@/lib/characters/match-status";
 import type { Character } from "@/lib/types/database";
+
+function characterMergeLabel(c: Character) {
+  return c.elevenlabs_voice_name
+    ? `${c.canonical_name} · ${c.elevenlabs_voice_name}`
+    : c.canonical_name;
+}
 
 export function CharacterCastActions({
   bookId,
@@ -45,18 +47,33 @@ export function CharacterCastActions({
 }) {
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeTargetId, setMergeTargetId] = useState("");
+  const [mergeSearch, setMergeSearch] = useState("");
   const [merging, setMerging] = useState(false);
 
   const mergeTargets = useMemo(
     () =>
-      roster.filter(
-        (c) =>
-          c.id !== detected.matched_character_id &&
-          c.canonical_name.toLowerCase() !== detected.name.toLowerCase() &&
-          c.canonical_name.toLowerCase() !== "narrator"
-      ),
+      roster
+        .filter(
+          (c) =>
+            c.id !== detected.matched_character_id &&
+            c.canonical_name.toLowerCase() !== detected.name.toLowerCase() &&
+            c.canonical_name.toLowerCase() !== "narrator"
+        )
+        .sort((a, b) =>
+          a.canonical_name.localeCompare(b.canonical_name, undefined, {
+            sensitivity: "base",
+          })
+        ),
     [roster, detected.matched_character_id, detected.name]
   );
+
+  const filteredMergeTargets = useMemo(() => {
+    const q = mergeSearch.trim().toLowerCase();
+    if (!q) return mergeTargets;
+    return mergeTargets.filter((c) =>
+      characterMergeLabel(c).toLowerCase().includes(q)
+    );
+  }, [mergeTargets, mergeSearch]);
 
   const suggestedTargetId =
     detected.match_status === "possible_alias" && detected.matched_character_id
@@ -64,8 +81,14 @@ export function CharacterCastActions({
       : mergeTargets[0]?.id ?? "";
 
   function openMergeDialog() {
+    setMergeSearch("");
     setMergeTargetId(suggestedTargetId);
     setMergeOpen(true);
+  }
+
+  function closeMergeDialog() {
+    setMergeOpen(false);
+    setMergeSearch("");
   }
 
   async function confirmMerge() {
@@ -92,6 +115,7 @@ export function CharacterCastActions({
         `Merged "${detected.name}" into ${target?.canonical_name ?? "character"} — lines now use that speaker`
       );
       setMergeOpen(false);
+      setMergeSearch("");
       onMerged();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Merge failed");
@@ -128,7 +152,12 @@ export function CharacterCastActions({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <Dialog open={mergeOpen} onOpenChange={(o) => !merging && setMergeOpen(o)}>
+      <Dialog
+        open={mergeOpen}
+        onOpenChange={(o) => {
+          if (!merging && !o) closeMergeDialog();
+        }}
+      >
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Merge &ldquo;{detected.name}&rdquo;</DialogTitle>
@@ -139,31 +168,83 @@ export function CharacterCastActions({
               becomes an alias on that character and disappears from this list.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 pt-1">
-            <Select value={mergeTargetId} onValueChange={setMergeTargetId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Merge into…" />
-              </SelectTrigger>
-              <SelectContent>
-                {mergeTargets.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.canonical_name}
-                    {c.elevenlabs_voice_name
-                      ? ` · ${c.elevenlabs_voice_name}`
-                      : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="space-y-3 pt-1">
+            <div>
+              <Label htmlFor={`merge-search-${detected.name}`}>
+                Merge into character
+              </Label>
+              <div className="relative mt-1">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate" />
+                <Input
+                  id={`merge-search-${detected.name}`}
+                  value={mergeSearch}
+                  onChange={(e) => setMergeSearch(e.target.value)}
+                  placeholder="Search characters…"
+                  className="pl-8"
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            <div className="max-h-52 overflow-y-auto rounded-md border border-border-muted">
+              {filteredMergeTargets.length === 0 ? (
+                <p className="px-3 py-4 text-sm text-slate">
+                  No characters match &ldquo;{mergeSearch.trim()}&rdquo;
+                </p>
+              ) : (
+                filteredMergeTargets.map((c) => {
+                  const selected = mergeTargetId === c.id;
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => setMergeTargetId(c.id)}
+                      className={cn(
+                        "flex w-full items-start gap-2 px-3 py-2 text-left text-sm transition-colors",
+                        selected
+                          ? "bg-warm-sand border-l-[3px] border-l-teal"
+                          : "hover:bg-warm-sand/50"
+                      )}
+                    >
+                      <Check
+                        className={cn(
+                          "mt-0.5 h-4 w-4 shrink-0 text-teal",
+                          selected ? "opacity-100" : "opacity-0"
+                        )}
+                      />
+                      <span className="min-w-0 break-words">
+                        {characterMergeLabel(c)}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            {mergeTargetId && (
+              <p className="text-[11px] text-slate">
+                Selected:{" "}
+                <span className="text-ink">
+                  {characterMergeLabel(
+                    mergeTargets.find((c) => c.id === mergeTargetId) ??
+                      roster.find((c) => c.id === mergeTargetId)!
+                  )}
+                </span>
+              </p>
+            )}
+
             <div className="flex justify-end gap-2">
               <Button
                 variant="ghost"
-                onClick={() => setMergeOpen(false)}
+                onClick={closeMergeDialog}
                 disabled={merging}
               >
                 Cancel
               </Button>
-              <Button onClick={() => void confirmMerge()} disabled={merging}>
+              <Button
+                onClick={() => void confirmMerge()}
+                disabled={merging || !mergeTargetId}
+              >
                 {merging ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />

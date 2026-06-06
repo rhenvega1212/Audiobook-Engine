@@ -27,12 +27,16 @@ import { VirtualManuscriptList } from "@/components/manuscript/virtual-manuscrip
 import { ManuscriptLineRow } from "@/components/manuscript/manuscript-line-row";
 import type { ManuscriptLine } from "@/lib/manuscript/types";
 import { ManuscriptCompactBlockRow } from "@/components/manuscript/manuscript-compact-block-row";
-import {
-  groupConsecutiveSpeakerBlocks,
+import { groupConsecutiveSpeakerBlocks,
   type SpeakerBlock,
 } from "@/lib/manuscript/group-lines";
+import {
+  countUnresolvedFlags,
+  lineNeedsHumanReview,
+} from "@/lib/books/flagged-lines";
 import { useLineAudioPlayer } from "@/components/audio/line-player";
 import { findCharacterBySpeaker } from "@/lib/characters/resolve-character";
+import { voicePlaybackFromCharacter } from "@/lib/elevenlabs/voice-cast";
 import { LineSelectionToolbar } from "@/components/manuscript/line-selection-toolbar";
 import { ManuscriptSelectionToolbar } from "@/components/manuscript/manuscript-selection-toolbar";
 import { ManuscriptHotkeysDialog } from "@/components/manuscript/manuscript-hotkeys-dialog";
@@ -143,6 +147,10 @@ export function ManuscriptStudioClient({
             elevenlabs_voice_id: c.elevenlabs_voice_id ?? null,
             elevenlabs_voice_name: c.elevenlabs_voice_name ?? null,
             voice_style: null,
+            voice_accent: null,
+            voice_locale: null,
+            voice_language: null,
+            voice_settings: null,
             voice_notes: null,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
@@ -247,7 +255,7 @@ export function ManuscriptStudioClient({
         result = result.filter((l) => l.speaker_label === speakerFilter);
       }
       if (flaggedOnly) {
-        result = result.filter((l) => l.flag_reason);
+        result = result.filter((l) => lineNeedsHumanReview(l));
       }
       if (search.trim()) {
         const q = search.toLowerCase();
@@ -274,7 +282,7 @@ export function ManuscriptStudioClient({
 
   const stats = useMemo(() => {
     const excluded = lines.filter((l) => l.excluded_from_export).length;
-    const flagged = lines.filter((l) => l.flag_reason).length;
+    const flagged = countUnresolvedFlags(lines);
     return { total: lines.length, excluded, flagged };
   }, [lines]);
 
@@ -382,6 +390,7 @@ export function ManuscriptStudioClient({
     return {
       voice_id: char?.elevenlabs_voice_id ?? null,
       voice_name: char?.elevenlabs_voice_name ?? null,
+      voice_playback: voicePlaybackFromCharacter(char),
       character: char,
     };
   }
@@ -394,8 +403,8 @@ export function ManuscriptStudioClient({
       prev.map((l) => {
         if (l.id !== lineId) return l;
         const next = { ...l, ...patch };
-        const { voice_id, voice_name } = voiceForLine(next);
-        return { ...next, voice_id, voice_name };
+        const { voice_id, voice_name, voice_playback } = voiceForLine(next);
+        return { ...next, voice_id, voice_name, voice_playback };
       })
     );
   }
@@ -509,7 +518,7 @@ export function ManuscriptStudioClient({
     const spoken = block.lines
       .map((l) => resolveSpokenLine(l.line_text, null, dictionary))
       .join("\n");
-    void playLine(lead.id, lead.voice_id ?? "", spoken);
+    void playLine(lead.id, lead.voice_id ?? "", spoken, lead.voice_playback ?? undefined);
   }
 
   function handleBlockCastVoice(block: SpeakerBlock<ManuscriptLine>) {
@@ -571,7 +580,7 @@ export function ManuscriptStudioClient({
 
   function handlePlay(line: ManuscriptLine) {
     const spoken = resolveSpokenLine(line.line_text, null, dictionary);
-    void playLine(line.id, line.voice_id ?? "", spoken);
+    void playLine(line.id, line.voice_id ?? "", spoken, line.voice_playback ?? undefined);
   }
 
   function handleCastVoice(line: ManuscriptLine) {
@@ -763,8 +772,8 @@ export function ManuscriptStudioClient({
         prev.map((l) => {
           if (!selectedIds.has(l.id)) return l;
           const next = { ...l, speaker_label, speaker_character_id };
-          const { voice_id, voice_name } = voiceForLine(next);
-          return { ...next, voice_id, voice_name };
+          const { voice_id, voice_name, voice_playback } = voiceForLine(next);
+          return { ...next, voice_id, voice_name, voice_playback };
         })
       );
       toast.success(`Updated speaker on ${ids.length} lines`);

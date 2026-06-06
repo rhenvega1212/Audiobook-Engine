@@ -33,7 +33,25 @@ export function ExportClient({
 }) {
   const [exported, setExported] = useState(status === "exported");
   const [downloading, setDownloading] = useState(false);
+  const [downloadingCasting, setDownloadingCasting] = useState(false);
   const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
+
+  async function downloadCastingSheet() {
+    setDownloadingCasting(true);
+    const res = await fetch(`/api/books/${bookId}/export/casting`);
+    setDownloadingCasting(false);
+    if (!res.ok) {
+      toast.error("Casting sheet download failed");
+      return;
+    }
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `book-${bookId}-casting-sheet.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast.success("Casting sheet downloaded");
+  }
 
   async function downloadCsv(force = false) {
     setDownloading(true);
@@ -156,6 +174,19 @@ export function ExportClient({
                 CSV lines include series pronunciation dictionary and any
                 per-line spoken overrides from proofread. Import into ElevenLabs
                 Studio with speakers matching canonical names.
+              </p>
+              <Button
+                variant="secondary"
+                className="w-full"
+                onClick={downloadCastingSheet}
+                disabled={downloadingCasting}
+              >
+                {downloadingCasting ? "Generating…" : "Download casting sheet"}
+              </Button>
+              <p className="text-xs text-slate">
+                Casting sheet lists each character&apos;s voice ID, accent,
+                locale, style descriptor, and tuning settings for ElevenLabs
+                setup.
               </p>
               {!exported && (
                 <Button

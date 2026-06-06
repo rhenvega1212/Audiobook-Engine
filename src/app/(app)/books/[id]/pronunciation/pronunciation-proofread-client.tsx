@@ -32,6 +32,10 @@ type LineRow = {
   has_override: boolean;
   voice_id: string | null;
   voice_name: string | null;
+  voice_playback?: {
+    language_code?: string;
+    voice_settings?: import("@/lib/elevenlabs/voice-settings").VoiceSettings;
+  } | null;
 };
 
 type Filter = "all" | "dictionary" | "overrides";
@@ -190,7 +194,12 @@ export function PronunciationProofreadClient({
               className="mt-2"
               disabled={!line.voice_id || loadingId !== null}
               onClick={() =>
-                playLine(line.id, line.voice_id ?? "", line.export_preview)
+                playLine(
+                  line.id,
+                  line.voice_id ?? "",
+                  line.export_preview,
+                  line.voice_playback ?? undefined
+                )
               }
             >
               {loadingId === line.id

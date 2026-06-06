@@ -4,6 +4,10 @@ import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Loader2, Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import type { VoiceCastConfig } from "@/lib/elevenlabs/voice-cast";
+import { normalizeVoiceSettings } from "@/lib/elevenlabs/voice-settings";
+
+export type LinePlaybackOptions = VoiceCastConfig;
 
 export function useLineAudioPlayer() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -17,7 +21,12 @@ export function useLineAudioPlayer() {
   }, []);
 
   const playLine = useCallback(
-    async (lineId: string, voiceId: string, text: string) => {
+    async (
+      lineId: string,
+      voiceId: string,
+      text: string,
+      options?: Omit<LinePlaybackOptions, "voice_id">
+    ) => {
       if (!voiceId) {
         toast.error("No voice cast for this speaker");
         return false;
@@ -34,12 +43,17 @@ export function useLineAudioPlayer() {
 
       setLoadingId(lineId);
       try {
+        const settings = normalizeVoiceSettings(options?.voice_settings);
         const res = await fetch("/api/voices/preview", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             voice_id: voiceId,
             text: text.slice(0, 2500),
+            ...(options?.language_code
+              ? { language_code: options.language_code }
+              : {}),
+            ...(settings ? { voice_settings: settings } : {}),
           }),
         });
         if (!res.ok) throw new Error("Playback failed");
@@ -72,12 +86,14 @@ export function PlayLineButton({
   lineId,
   voiceId,
   text,
+  playback,
   size = "sm",
   label = "Listen",
 }: {
   lineId: string;
   voiceId: string | null;
   text: string;
+  playback?: Omit<LinePlaybackOptions, "voice_id">;
   size?: "sm" | "default";
   label?: string;
 }) {
@@ -91,7 +107,7 @@ export function PlayLineButton({
       variant="secondary"
       size={size}
       disabled={disabled || (loadingId !== null && loadingId !== lineId)}
-      onClick={() => playLine(lineId, voiceId ?? "", text)}
+      onClick={() => playLine(lineId, voiceId ?? "", text, playback)}
     >
       {loadingId === lineId ? (
         <Loader2 className="h-3 w-3 animate-spin mr-1" />

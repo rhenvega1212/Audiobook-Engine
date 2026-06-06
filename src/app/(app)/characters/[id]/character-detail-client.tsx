@@ -25,6 +25,8 @@ import {
 } from "@/components/ui/table";
 import { VoicePickerDialog } from "@/components/voice-picker-dialog";
 import { voiceAssignmentsFromCharacters } from "@/lib/elevenlabs/voice-picker-utils";
+import { formatVoiceCastSummary } from "@/lib/elevenlabs/voice-cast";
+import { formatAccentLabel } from "@/lib/elevenlabs/voice-accents";
 import type { Character, CharacterRole } from "@/lib/types/database";
 import {
   ROLE_LABELS,
@@ -172,6 +174,17 @@ export function CharacterDetailClient({
             <span className="text-slate text-body-sm">Voice: </span>
             {character.elevenlabs_voice_name ?? "Not cast"}
           </p>
+          {character.elevenlabs_voice_id ? (
+            <p className="text-body-sm text-slate">
+              Cast: {formatVoiceCastSummary(character)}
+            </p>
+          ) : null}
+          {character.voice_accent ? (
+            <p className="text-body-sm text-slate">
+              Accent: {formatAccentLabel(character.voice_accent)}
+              {character.voice_locale ? ` (${character.voice_locale})` : ""}
+            </p>
+          ) : null}
           <div>
             <Label htmlFor="style">Style descriptor</Label>
             <Input

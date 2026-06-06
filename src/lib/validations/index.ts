@@ -27,6 +27,14 @@ export const characterSchema = z.object({
   description: z.string().max(1000).optional().nullable(),
 });
 
+const voiceSettingsSchema = z.object({
+  stability: z.number().min(0).max(1).optional(),
+  similarity_boost: z.number().min(0).max(1).optional(),
+  style: z.number().min(0).max(1).optional(),
+  speed: z.number().min(0.5).max(2).optional(),
+  use_speaker_boost: z.boolean().optional(),
+});
+
 export const characterPatchSchema = z.object({
   canonical_name: z.string().min(1).max(200).optional(),
   aliases: z.array(z.string()).optional(),
@@ -35,6 +43,10 @@ export const characterPatchSchema = z.object({
   elevenlabs_voice_id: z.string().nullable().optional(),
   elevenlabs_voice_name: z.string().nullable().optional(),
   voice_style: z.string().nullable().optional(),
+  voice_accent: z.string().nullable().optional(),
+  voice_locale: z.string().nullable().optional(),
+  voice_language: z.string().nullable().optional(),
+  voice_settings: voiceSettingsSchema.nullable().optional(),
   voice_notes: z.string().nullable().optional(),
 });
 

@@ -33,6 +33,10 @@ type ListenLine = {
   spoken_text: string;
   voice_id: string | null;
   voice_name: string | null;
+  voice_playback?: {
+    language_code?: string;
+    voice_settings?: import("@/lib/elevenlabs/voice-settings").VoiceSettings;
+  } | null;
   excluded_from_export: boolean;
 };
 
@@ -152,7 +156,8 @@ export function ListenClient({
     lineId: string,
     voiceId: string | null,
     text: string,
-    speakerLabel: string
+    speakerLabel: string,
+    playback?: ListenLine["voice_playback"]
   ): Promise<boolean> {
     if (!voiceId) {
       toast.error(`No voice cast for ${speakerLabel}`);
@@ -171,6 +176,12 @@ export function ListenClient({
         body: JSON.stringify({
           voice_id: voiceId,
           text: text.slice(0, 2500),
+          ...(playback?.language_code
+            ? { language_code: playback.language_code }
+            : {}),
+          ...(playback?.voice_settings
+            ? { voice_settings: playback.voice_settings }
+            : {}),
         }),
       });
       if (!res.ok) throw new Error("Playback failed");
@@ -211,13 +222,20 @@ export function ListenClient({
         voiceLine.id,
         voiceLine.voice_id,
         block.lines.map((l) => l.spoken_text).join("\n"),
-        block.speaker_label
+        block.speaker_label,
+        voiceLine.voice_playback
       );
     }
     const line = filtered[index];
     if (!line) return false;
     setCurrentIndex(index);
-    return playText(line.id, line.voice_id, line.spoken_text, line.speaker_label);
+    return playText(
+      line.id,
+      line.voice_id,
+      line.spoken_text,
+      line.speaker_label,
+      line.voice_playback
+    );
   }
 
   async function handlePlayLine(index = currentIndex) {

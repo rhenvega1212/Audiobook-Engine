@@ -40,9 +40,7 @@ export async function POST(
 
   if (
     payload.human_reviewed === true &&
-    payload.flag_reason === undefined &&
-    payload.speaker_label &&
-    payload.speaker_label !== "UNKNOWN"
+    payload.flag_reason === undefined
   ) {
     updates.flag_reason = null;
   }

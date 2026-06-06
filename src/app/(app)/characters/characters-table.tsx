@@ -21,6 +21,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { formatAccentLabel } from "@/lib/elevenlabs/voice-accents";
 import type { PenName, Series, CharacterRole } from "@/lib/types/database";
 import {
   type LibraryCharacter,
@@ -260,6 +261,7 @@ export function CharactersTable({
                 <TableHead>Cast</TableHead>
                 <TableHead>Series</TableHead>
                 <TableHead>Voice</TableHead>
+                <TableHead>Accent</TableHead>
                 <TableHead>Style</TableHead>
               </TableRow>
             </TableHeader>
@@ -308,6 +310,9 @@ export function CharactersTable({
                   </TableCell>
                   <TableCell className="max-w-[140px] truncate">
                     {c.elevenlabs_voice_name ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-slate max-w-[100px] truncate">
+                    {c.voice_accent ? formatAccentLabel(c.voice_accent) : "—"}
                   </TableCell>
                   <TableCell className="text-slate max-w-[120px] truncate">
                     {c.voice_style ?? "—"}

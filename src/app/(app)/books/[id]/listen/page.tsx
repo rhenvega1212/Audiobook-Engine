@@ -6,6 +6,7 @@ import { findCharacterBySpeaker } from "@/lib/characters/resolve-character";
 import type { Character } from "@/lib/types/database";
 import { displayBookTitle } from "@/lib/books/display-title";
 import { ListenClient } from "./listen-client";
+import { voicePlaybackFromCharacter } from "@/lib/elevenlabs/voice-cast";
 
 export const dynamic = "force-dynamic";
 
@@ -77,6 +78,7 @@ export default async function ListenPage({
       spoken_text: resolveSpokenLine(l.line_text, l.spoken_text, dict),
       voice_id: char?.elevenlabs_voice_id ?? null,
       voice_name: char?.elevenlabs_voice_name ?? null,
+      voice_playback: voicePlaybackFromCharacter(char),
       excluded_from_export: l.excluded_from_export ?? false,
     };
   });

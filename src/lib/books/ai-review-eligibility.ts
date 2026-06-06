@@ -2,6 +2,7 @@ import {
   lineNeedsAiPass,
   type TaggedLineForAi,
 } from "@/lib/engine/ai-line-eligibility";
+import { lineNeedsHumanReview } from "@/lib/books/flagged-lines";
 import {
   type AiReviewScope,
   eligibleLineIndices,
@@ -20,7 +21,7 @@ export type LineForAiEligibility = {
 };
 
 export type AiReviewEligibilityStats = {
-  /** Lines with any flag_reason set (book page “flagged” count). */
+  /** Lines still needing human review (matches book page flagged count). */
   flagged_count: number;
   /** Lines Claude would review with current scope and options. */
   eligible_for_ai: number;
@@ -50,7 +51,7 @@ export function summarizeAiReviewEligibility(
   chapters: BookChapterRow[],
   includeAiReviewed: boolean
 ): AiReviewEligibilityStats {
-  const flagged = lines.filter((l) => l.flag_reason);
+  const flagged = lines.filter((l) => lineNeedsHumanReview(l));
   const eligibleIndices = eligibleLineIndices(
     lines.map((l) => ({ id: "", line_order: l.line_order })),
     scope,
@@ -89,7 +90,7 @@ export function summarizeAiReviewEligibility(
 
 export function describeAiEligibility(stats: AiReviewEligibilityStats): string {
   if (stats.flagged_count === 0) {
-    return "No lines are currently flagged. The rules engine and your manual review may have cleared them all.";
+    return "No lines need human review. Some lines may still show AI audit notes in the database, but you have cleared the review queue.";
   }
   if (stats.eligible_for_ai === 0) {
     const parts: string[] = [];

@@ -3,6 +3,7 @@ import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
 import { notFound } from "next/navigation";
 import { resolveSpokenLine } from "@/lib/pronunciation/apply";
 import { displayBookTitle } from "@/lib/books/display-title";
+import { lineNeedsHumanReview } from "@/lib/books/flagged-lines";
 import { LineReviewClient } from "./line-review-client";
 
 export const dynamic = "force-dynamic";
@@ -26,7 +27,9 @@ export default async function LineReviewPage({
   const [{ data: characters }, { data: dictionary }] = await Promise.all([
     supabase
       .from("characters")
-      .select("id, canonical_name, elevenlabs_voice_id, elevenlabs_voice_name")
+      .select(
+        "id, canonical_name, elevenlabs_voice_id, elevenlabs_voice_name, voice_language, voice_settings"
+      )
       .eq("series_id", book.series_id),
     supabase
       .from("pronunciations")
@@ -36,7 +39,7 @@ export default async function LineReviewPage({
 
   const lines = await fetchAllTaggedLines(supabase, id, "*");
   const dict = dictionary ?? [];
-  const flagged = lines.filter((l) => l.flag_reason);
+  const flagged = lines.filter((l) => lineNeedsHumanReview(l));
   const reviewed = flagged.filter((l) => l.human_reviewed).length;
 
   const voiceBySpeaker = Object.fromEntries(
