@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api/auth";
 import { lineMergeSchema } from "@/lib/validations";
 import { mergeTaggedLines } from "@/lib/books/line-operations";
+import { ensureEditCheckpoint } from "@/lib/books/manuscript-snapshot";
 
 export async function POST(
   request: Request,
@@ -22,6 +23,7 @@ export async function POST(
   const admin = createAdminClient();
 
   try {
+    await ensureEditCheckpoint(admin, bookId);
     const result = await mergeTaggedLines(admin, bookId, parsed.data.line_ids);
     return NextResponse.json(result);
   } catch (e) {

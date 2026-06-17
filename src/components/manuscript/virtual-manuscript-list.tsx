@@ -32,6 +32,8 @@ export function VirtualManuscriptList<T extends { id: string }>({
   const parentRef = useRef<HTMLDivElement>(null);
   const heightsRef = useRef<Map<string, number>>(new Map());
   const rafRef = useRef<number | null>(null);
+  const prevScrollKeyRef = useRef<string | number | undefined>(undefined);
+  const prevScrollToIndexRef = useRef<number | null | undefined>(undefined);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(600);
   const [, bumpMeasure] = useState(0);
@@ -72,31 +74,38 @@ export function VirtualManuscriptList<T extends { id: string }>({
     const el = parentRef.current;
     if (!el) return;
 
-    if (scrollToIndex == null || scrollToIndex < 0) {
-      if (scrollKey != null) {
-        el.scrollTop = 0;
-        setScrollTop(0);
-      }
-      return;
-    }
+    const scrollKeyChanged = prevScrollKeyRef.current !== scrollKey;
+    const scrollToIndexChanged = prevScrollToIndexRef.current !== scrollToIndex;
+    prevScrollKeyRef.current = scrollKey;
+    prevScrollToIndexRef.current = scrollToIndex;
 
-    if (useNativeScroll) {
-      if (scrollToIndex === 0) {
-        el.scrollTop = 0;
-        setScrollTop(0);
-      } else {
-        const child = el.children[scrollToIndex] as HTMLElement | undefined;
-        if (child) {
-          child.scrollIntoView({ block: "start", behavior: "auto" });
-          setScrollTop(el.scrollTop);
+    if (scrollToIndex != null && scrollToIndex >= 0) {
+      if (!scrollToIndexChanged && !scrollKeyChanged) return;
+
+      if (useNativeScroll) {
+        if (scrollToIndex === 0) {
+          el.scrollTop = 0;
+          setScrollTop(0);
+        } else {
+          const child = el.children[scrollToIndex] as HTMLElement | undefined;
+          if (child) {
+            child.scrollIntoView({ block: "start", behavior: "auto" });
+            setScrollTop(el.scrollTop);
+          }
         }
+        return;
       }
+
+      el.scrollTop = getOffset(scrollToIndex);
+      setScrollTop(el.scrollTop);
       return;
     }
 
-    el.scrollTop = getOffset(scrollToIndex);
-    setScrollTop(el.scrollTop);
-  }, [scrollToIndex, scrollKey, getOffset, useNativeScroll, items.length]);
+    if (scrollKeyChanged) {
+      el.scrollTop = 0;
+      setScrollTop(0);
+    }
+  }, [scrollToIndex, scrollKey, getOffset, useNativeScroll]);
 
   const onRowResize = useCallback((id: string, height: number) => {
     const prev = heightsRef.current.get(id);

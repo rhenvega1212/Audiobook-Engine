@@ -1,0 +1,25 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Open app in Simple Browser",
+      "type": "shell",
+      "command": "echo ${input:openAppBrowser}",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "never",
+        "echo": false,
+        "focus": false,
+        "panel": "shared"
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "openAppBrowser",
+      "type": "command",
+      "command": "simpleBrowser.show",
+      "args": ["http://localhost:3001/login"]
+    }
+  ]
+}

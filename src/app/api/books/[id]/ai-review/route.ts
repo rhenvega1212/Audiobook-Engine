@@ -56,6 +56,8 @@ export async function POST(
   let maxScenes = 12;
   let createSnapshot = false;
   let includeAiReviewed = false;
+  let fullScrub = false;
+  let respectHumanReviewed = true;
   let undo = false;
   let scope: AiReviewScope = { type: "flagged" };
   let chapters: BookChapterRow[] = [];
@@ -67,6 +69,8 @@ export async function POST(
     }
     if (body.create_snapshot === true) createSnapshot = true;
     if (body.include_ai_reviewed === true) includeAiReviewed = true;
+    if (body.full_scrub === true) fullScrub = true;
+    if (body.respect_human_reviewed === false) respectHumanReviewed = false;
     if (body.undo === true) undo = true;
     if (body.scope?.type === "chapter" && body.scope.chapter_id) {
       scope = { type: "chapter", chapterId: body.scope.chapter_id };
@@ -105,6 +109,8 @@ export async function POST(
       maxScenes,
       createSnapshot,
       includeAiReviewed,
+      respectHumanReviewed,
+      fullScrub,
       scope,
       chapters,
     });

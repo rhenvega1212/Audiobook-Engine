@@ -308,7 +308,7 @@ export async function runAiAssistedPass(
           (attr.confidence as TaggedLine["confidence"]) ?? "medium";
         const line = taggedLines[globalIdx]!;
 
-        if (!shouldProposeSpeakerChange(line, oldSpeaker, newSpeaker)) {
+        if (!shouldProposeSpeakerChange(line, oldSpeaker, newSpeaker, options)) {
           continue;
         }
 

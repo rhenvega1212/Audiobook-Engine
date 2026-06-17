@@ -23,6 +23,7 @@ export function ManuscriptCompactBlockRow({
   isSaving,
   isPlaying,
   isPlayLoading,
+  onHighlight,
   onSelect,
   onSpeakerChange,
   onToggleExclude,
@@ -38,6 +39,7 @@ export function ManuscriptCompactBlockRow({
   isSaving: boolean;
   isPlaying: boolean;
   isPlayLoading: boolean;
+  onHighlight: (block: SpeakerBlock<ManuscriptLine>) => void;
   onSelect: (block: SpeakerBlock<ManuscriptLine>, shiftKey: boolean) => void;
   onSpeakerChange: (
     block: SpeakerBlock<ManuscriptLine>,
@@ -60,16 +62,7 @@ export function ManuscriptCompactBlockRow({
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={(e) => onSelect(block, e.shiftKey)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect(block, e.shiftKey);
-        }
-      }}
-      className={`rounded-lg transition-colors cursor-pointer ${
+      className={`rounded-lg transition-colors ${
         isHighlighted ? "ring-2 ring-teal/40" : ""
       }`}
     >
@@ -79,8 +72,13 @@ export function ManuscriptCompactBlockRow({
         excluded={excluded}
         flagged={flagged}
         voiceName={lead.voice_name}
+        onBodyClick={() => onHighlight(block)}
         headerActions={
-          <>
+          <div
+            className="flex flex-wrap items-center gap-2"
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
             <input
               type="checkbox"
               checked={isSelected}
@@ -153,7 +151,7 @@ export function ManuscriptCompactBlockRow({
               Skip export
             </label>
             {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          </>
+          </div>
         }
       >
         {block.combined_text}

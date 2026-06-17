@@ -9,6 +9,7 @@ export function CompactSpeakerBlock({
   flagged,
   voiceName,
   headerActions,
+  onBodyClick,
   children,
 }: {
   speakerLabel: string;
@@ -17,6 +18,7 @@ export function CompactSpeakerBlock({
   flagged?: boolean;
   voiceName?: string | null;
   headerActions?: ReactNode;
+  onBodyClick?: () => void;
   children: ReactNode;
 }) {
   return (
@@ -49,9 +51,22 @@ export function CompactSpeakerBlock({
         )}
       </div>
       <div
+        role={onBodyClick ? "button" : undefined}
+        tabIndex={onBodyClick ? 0 : undefined}
+        onClick={onBodyClick}
+        onKeyDown={
+          onBodyClick
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onBodyClick();
+                }
+              }
+            : undefined
+        }
         className={`font-serif text-sm whitespace-pre-wrap break-words ${
-          excluded ? "line-through text-slate" : "text-ink"
-        }`}
+          onBodyClick ? "cursor-pointer" : ""
+        } ${excluded ? "line-through text-slate" : "text-ink"}`}
       >
         {children}
       </div>

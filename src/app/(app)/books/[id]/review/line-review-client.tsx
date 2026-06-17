@@ -27,6 +27,7 @@ import {
   NARRATOR_VALUE,
   UNKNOWN_VALUE,
 } from "@/lib/manuscript/speaker-utils";
+import { SaveCheckpointButton } from "@/components/books/save-checkpoint-button";
 
 function formatApiError(data: unknown, fallback: string): string {
   if (!data || typeof data !== "object") return fallback;
@@ -262,7 +263,10 @@ export function LineReviewClient({
     if (!current || confirming) return;
     setConfirming(true);
     try {
-      const saved = await persistLine(current, { human_reviewed: true });
+      const saved = await persistLine(current, {
+        human_reviewed: true,
+        flag_reason: null,
+      });
       if (!saved) return;
       patchLineRow(current.id, saved);
       advance();
@@ -405,7 +409,7 @@ export function LineReviewClient({
               {aiReviewProgress}%
             </span>
           </div>
-          <Progress value={aiReviewProgress} className="h-2" />
+          <Progress value={aiReviewProgress} active className="h-2.5" />
           <p className="text-body-sm text-slate">
             Reviewing flagged lines in batches — this may take a few minutes.
           </p>
@@ -544,6 +548,11 @@ export function LineReviewClient({
       </div>
 
       <div className="flex flex-wrap gap-2">
+        <SaveCheckpointButton
+          bookId={bookId}
+          defaultLabel={`Review — ${reviewed} of ${total} cleared`}
+          variant="secondary"
+        />
         <Button
           variant="outline"
           onClick={goBack}

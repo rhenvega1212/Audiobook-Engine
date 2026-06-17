@@ -2,6 +2,7 @@ import type { AiReviewProposal } from "@/lib/books/ai-review-proposals";
 import type { AiReviewEligibilityStats } from "@/lib/books/ai-review-eligibility";
 import type { AiReviewScope } from "@/lib/books/ai-review-scope";
 import type { BookChapterRow } from "@/lib/books/book-chapters";
+import { startAiReviewProgressTicker } from "@/lib/books/ai-review-progress-ticker";
 
 export type BatchAiReviewProgress = {
   message: string;
@@ -15,6 +16,8 @@ export type AiReviewPreviewOptions = {
   scope?: AiReviewScope;
   chapters?: BookChapterRow[];
   includeAiReviewed?: boolean;
+  respectHumanReviewed?: boolean;
+  fullScrub?: boolean;
 };
 
 /** Run Claude in preview mode (no DB writes), batched for progress updates. */
@@ -35,37 +38,56 @@ export async function runBatchAiReviewPreview(
   const allErrors: string[] = [];
   let apiCalls = 0;
   let lastEligibility: AiReviewEligibilityStats | undefined;
+  let displayProgress = 3;
 
   onProgress?.({
     message: "Connecting to Claude…",
-    progress: 3,
+    progress: displayProgress,
     batch: 0,
     pending: 0,
   });
 
   while (hasMore && batch < 40) {
     batch++;
-    onProgress?.({
-      message: `Reading scenes from your Word file (batch ${batch})…`,
-      progress: hasMore ? Math.min(92, 8 + batch * 7) : 100,
-      batch,
-      pending: allProposals.length,
-    });
+    const stopTicker = startAiReviewProgressTicker(
+      (progress, message) => {
+        displayProgress = Math.max(displayProgress, progress);
+        onProgress?.({
+          message,
+          progress: displayProgress,
+          batch,
+          pending: allProposals.length,
+        });
+      },
+      {
+        floor: displayProgress,
+        ceiling: Math.min(94, displayProgress + 78),
+        batch,
+        mode: "preview",
+      }
+    );
 
-    const res = await fetch(`/api/books/${bookId}/ai-review/preview`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        max_scenes: 12,
-        include_ai_reviewed: options?.includeAiReviewed === true,
-        processed_indices: processedIndices,
-        scope:
-          options?.scope?.type === "chapter"
-            ? { type: "chapter", chapter_id: options.scope.chapterId }
-            : { type: "flagged" },
-        chapters: options?.chapters,
-      }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`/api/books/${bookId}/ai-review/preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          max_scenes: 12,
+          include_ai_reviewed: options?.includeAiReviewed === true,
+          full_scrub: options?.fullScrub === true,
+          respect_human_reviewed: options?.respectHumanReviewed !== false,
+          processed_indices: processedIndices,
+          scope:
+            options?.scope?.type === "chapter"
+              ? { type: "chapter", chapter_id: options.scope.chapterId }
+              : { type: "flagged" },
+          chapters: options?.chapters,
+        }),
+      });
+    } finally {
+      stopTicker();
+    }
 
     const data = await res.json().catch(() => ({}));
 
@@ -115,24 +137,27 @@ export async function runBatchAiReviewPreview(
       ? Math.min(95, 10 + batch * 8)
       : 100;
 
+    displayProgress = Math.max(displayProgress, progress);
+
     onProgress?.({
       message: hasMore
         ? `Batch ${batch}: ${allProposals.length.toLocaleString()} suggestion${allProposals.length === 1 ? "" : "s"} so far…`
         : allProposals.length > 0
           ? `${allProposals.length.toLocaleString()} suggestions ready`
           : "No changes suggested",
-      progress,
+      progress: displayProgress,
       batch,
       pending: allProposals.length,
     });
   }
 
+  displayProgress = 100;
   onProgress?.({
     message:
       allProposals.length > 0
         ? `${allProposals.length.toLocaleString()} suggestions ready`
         : "No changes suggested",
-    progress: 100,
+    progress: displayProgress,
     batch,
     pending: allProposals.length,
   });
@@ -168,30 +193,54 @@ export async function runBatchAiReview(
   let batch = 0;
   let startPending = initialFlagged ?? 0;
   let lastPendingHuman = startPending;
+  let displayProgress = 3;
 
   onProgress?.({
     message: "Connecting to Claude…",
-    progress: 3,
+    progress: displayProgress,
     batch: 0,
     pending: startPending,
   });
 
   while (hasMore) {
     batch++;
-    const res = await fetch(`/api/books/${bookId}/ai-review`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        max_scenes: 12,
-        create_snapshot: batch === 1 && options?.createSnapshot === true,
-        include_ai_reviewed: options?.includeAiReviewed === true,
-        scope:
-          options?.scope?.type === "chapter"
-            ? { type: "chapter", chapter_id: options.scope.chapterId }
-            : { type: "flagged" },
-        chapters: options?.chapters,
-      }),
-    });
+    const stopTicker = startAiReviewProgressTicker(
+      (progress, message) => {
+        displayProgress = Math.max(displayProgress, progress);
+        onProgress?.({
+          message,
+          progress: displayProgress,
+          batch,
+          pending: lastPendingHuman,
+        });
+      },
+      {
+        floor: displayProgress,
+        ceiling: Math.min(94, displayProgress + 78),
+        batch,
+        mode: "apply",
+      }
+    );
+
+    let res: Response;
+    try {
+      res = await fetch(`/api/books/${bookId}/ai-review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          max_scenes: 12,
+          create_snapshot: batch === 1 && options?.createSnapshot === true,
+          include_ai_reviewed: options?.includeAiReviewed === true,
+          scope:
+            options?.scope?.type === "chapter"
+              ? { type: "chapter", chapter_id: options.scope.chapterId }
+              : { type: "flagged" },
+          chapters: options?.chapters,
+        }),
+      });
+    } finally {
+      stopTicker();
+    }
 
     const data = await res.json().catch(() => ({}));
 
@@ -244,17 +293,20 @@ export async function runBatchAiReview(
       progress = hasMore ? Math.min(95, Math.min(batch * 8, 90)) : 100;
     }
 
+    displayProgress = Math.max(displayProgress, progress);
+
     onProgress?.({
       message: `Batch ${batch}: reviewed ${scenes} scene${scenes === 1 ? "" : "s"}…`,
-      progress,
+      progress: displayProgress,
       batch,
       pending: pendingHuman,
     });
   }
 
+  displayProgress = 100;
   onProgress?.({
     message: "AI review complete",
-    progress: 100,
+    progress: displayProgress,
     batch,
     pending: lastPendingHuman,
   });

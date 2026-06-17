@@ -16,6 +16,7 @@ const bodySchema = z.object({
     )
     .min(1),
   create_snapshot: z.boolean().optional(),
+  respect_human_reviewed: z.boolean().optional(),
 });
 
 export async function POST(
@@ -39,7 +40,10 @@ export async function POST(
       admin,
       id,
       parsed.data.items,
-      { createSnapshot: parsed.data.create_snapshot !== false }
+      {
+        createSnapshot: parsed.data.create_snapshot !== false,
+        respectHumanReviewed: parsed.data.respect_human_reviewed !== false,
+      }
     );
     return NextResponse.json(result);
   } catch (e) {

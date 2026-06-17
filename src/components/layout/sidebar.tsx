@@ -12,6 +12,7 @@ import {
   Shield,
   PanelLeftClose,
   PanelLeftOpen,
+  Inbox,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
@@ -80,9 +81,13 @@ export function SidebarExpandButton() {
 export function SidebarDesktop({
   userEmail,
   showTeamAccess = false,
+  showAdminIssues = false,
+  openIssueCount = 0,
 }: {
   userEmail: string;
   showTeamAccess?: boolean;
+  showAdminIssues?: boolean;
+  openIssueCount?: number;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -157,13 +162,41 @@ export function SidebarDesktop({
             className={cn(
               "flex items-center rounded-md py-2 text-sm font-medium transition-colors",
               isCollapsed ? "justify-center px-2" : "gap-3 px-3",
-              isNavActive(pathname, "/admin")
+              pathname.startsWith("/admin/users")
                 ? "bg-burgundy text-bone"
                 : "text-slate hover:bg-warm-sand hover:text-ink"
             )}
           >
             <Shield className="h-4 w-4 shrink-0" />
             {!isCollapsed && "Team access"}
+          </Link>
+        )}
+        {showAdminIssues && (
+          <Link
+            href="/admin/issues"
+            title="Issue reports"
+            className={cn(
+              "flex items-center rounded-md py-2 text-sm font-medium transition-colors",
+              isCollapsed ? "justify-center px-2" : "gap-3 px-3",
+              pathname.startsWith("/admin/issues")
+                ? "bg-burgundy text-bone"
+                : "text-slate hover:bg-warm-sand hover:text-ink"
+            )}
+          >
+            <Inbox className="h-4 w-4 shrink-0" />
+            {!isCollapsed && (
+              <span className="flex items-center gap-2 min-w-0">
+                <span className="truncate">Issues</span>
+                {openIssueCount > 0 && (
+                  <span className="rounded-full bg-burgundy text-bone text-[10px] font-semibold px-1.5 py-0.5 leading-none">
+                    {openIssueCount}
+                  </span>
+                )}
+              </span>
+            )}
+            {isCollapsed && openIssueCount > 0 && (
+              <span className="sr-only">{openIssueCount} open</span>
+            )}
           </Link>
         )}
       </nav>
@@ -208,8 +241,12 @@ export function SidebarDesktop({
 
 export function SidebarMobile({
   showTeamAccess = false,
+  showAdminIssues = false,
+  openIssueCount = 0,
 }: {
   showTeamAccess?: boolean;
+  showAdminIssues?: boolean;
+  openIssueCount?: number;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -253,12 +290,26 @@ export function SidebarMobile({
               href="/admin/users"
               className={cn(
                 "block px-4 py-2 text-sm",
-                isNavActive(pathname, "/admin")
+                pathname.startsWith("/admin/users")
                   ? "bg-burgundy text-bone"
                   : "text-ink hover:bg-warm-sand"
               )}
             >
               Team access
+            </Link>
+          )}
+          {showAdminIssues && (
+            <Link
+              href="/admin/issues"
+              className={cn(
+                "block px-4 py-2 text-sm",
+                pathname.startsWith("/admin/issues")
+                  ? "bg-burgundy text-bone"
+                  : "text-ink hover:bg-warm-sand"
+              )}
+            >
+              Issues
+              {openIssueCount > 0 ? ` (${openIssueCount})` : ""}
             </Link>
           )}
           <button

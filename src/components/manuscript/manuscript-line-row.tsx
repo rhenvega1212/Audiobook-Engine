@@ -26,6 +26,7 @@ export function ManuscriptLineRow({
   isSaving,
   isPlaying,
   isPlayLoading,
+  onHighlight,
   onSelect,
   onSpeakerChange,
   onToggleExclude,
@@ -46,6 +47,7 @@ export function ManuscriptLineRow({
   isSaving: boolean;
   isPlaying: boolean;
   isPlayLoading: boolean;
+  onHighlight: (lineId: string) => void;
   onSelect: (lineId: string, shiftKey: boolean) => void;
   onSpeakerChange: (
     line: ManuscriptLine,
@@ -73,16 +75,7 @@ export function ManuscriptLineRow({
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={(e) => onSelect(line.id, e.shiftKey)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect(line.id, e.shiftKey);
-        }
-      }}
-      className={`rounded-md px-3 py-2 transition-colors cursor-pointer border-l-4 ${
+      className={`rounded-md px-3 py-2 transition-colors border-l-4 ${
         isHighlighted
           ? "bg-teal/15 border-l-teal ring-1 ring-teal/30"
           : isSelected
@@ -94,7 +87,11 @@ export function ManuscriptLineRow({
                 : "bg-warm-sand/25 border-l-transparent hover:bg-warm-sand/50"
       }`}
     >
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-1.5">
+      <div
+        className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-1.5"
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <input
           type="checkbox"
           checked={isSelected}
@@ -203,7 +200,16 @@ export function ManuscriptLineRow({
 
       <p
         ref={textRef}
-        className={`font-serif text-sm break-words whitespace-pre-wrap pl-6 select-text ${
+        role="button"
+        tabIndex={0}
+        onClick={() => onHighlight(line.id)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onHighlight(line.id);
+          }
+        }}
+        className={`font-serif text-sm break-words whitespace-pre-wrap pl-6 select-text cursor-pointer ${
           excluded ? "line-through text-slate" : "text-ink"
         } ${selectionEnabled ? "cursor-text" : ""}`}
         onMouseUp={(e) => {

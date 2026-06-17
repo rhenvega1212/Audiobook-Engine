@@ -2,12 +2,18 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Shield, LogOut, Menu, BookOpen } from "lucide-react";
+import { Shield, LogOut, Menu, BookOpen, Inbox } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 
-export function AdminSidebar({ userEmail }: { userEmail: string }) {
+export function AdminSidebar({
+  userEmail,
+  openIssueCount = 0,
+}: {
+  userEmail: string;
+  openIssueCount?: number;
+}) {
   const pathname = usePathname();
   const router = useRouter();
 
@@ -43,13 +49,32 @@ export function AdminSidebar({ userEmail }: { userEmail: string }) {
             href="/admin/users"
             className={cn(
               "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-              pathname.startsWith("/admin")
+              pathname.startsWith("/admin/users")
                 ? "bg-burgundy text-bone"
                 : "text-slate hover:bg-warm-sand hover:text-ink"
             )}
           >
             <Shield className="h-4 w-4" />
             Team access
+          </Link>
+          <Link
+            href="/admin/issues"
+            className={cn(
+              "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+              pathname.startsWith("/admin/issues")
+                ? "bg-burgundy text-bone"
+                : "text-slate hover:bg-warm-sand hover:text-ink"
+            )}
+          >
+            <Inbox className="h-4 w-4" />
+            <span className="flex items-center gap-2">
+              Issues
+              {openIssueCount > 0 && (
+                <span className="rounded-full bg-burgundy text-bone text-[10px] font-semibold px-1.5 py-0.5 leading-none">
+                  {openIssueCount}
+                </span>
+              )}
+            </span>
           </Link>
         </nav>
         <div className="border-t border-border p-4">
@@ -90,12 +115,23 @@ export function AdminSidebar({ userEmail }: { userEmail: string }) {
               href="/admin/users"
               className={cn(
                 "block px-4 py-2 text-sm",
-                pathname.startsWith("/admin")
+                pathname.startsWith("/admin/users")
                   ? "bg-burgundy text-bone"
                   : "text-ink hover:bg-warm-sand"
               )}
             >
               Team access
+            </Link>
+            <Link
+              href="/admin/issues"
+              className={cn(
+                "block px-4 py-2 text-sm",
+                pathname.startsWith("/admin/issues")
+                  ? "bg-burgundy text-bone"
+                  : "text-ink hover:bg-warm-sand"
+              )}
+            >
+              Issues{openIssueCount > 0 ? ` (${openIssueCount})` : ""}
             </Link>
             <p className="border-t border-border px-4 py-2 text-body-sm text-slate truncate">
               {userEmail}

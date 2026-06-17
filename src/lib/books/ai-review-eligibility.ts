@@ -49,8 +49,18 @@ export function summarizeAiReviewEligibility(
   lines: LineForAiEligibility[],
   scope: AiReviewScope,
   chapters: BookChapterRow[],
-  includeAiReviewed: boolean
+  options: {
+    includeAiReviewed?: boolean;
+    respectHumanReviewed?: boolean;
+    fullScrub?: boolean;
+  } = {}
 ): AiReviewEligibilityStats {
+  const includeAiReviewed = options.includeAiReviewed === true;
+  const passOpts = {
+    includeAiReviewed,
+    respectHumanReviewed: options.respectHumanReviewed,
+    fullScrub: options.fullScrub,
+  };
   const flagged = lines.filter((l) => lineNeedsHumanReview(l));
   const eligibleIndices = eligibleLineIndices(
     lines.map((l) => ({ id: "", line_order: l.line_order })),
@@ -63,8 +73,8 @@ export function summarizeAiReviewEligibility(
   for (let i = 0; i < engineLines.length; i++) {
     if (
       lineNeedsAiPass(engineLines[i]!, i, {
+        ...passOpts,
         eligibleIndices,
-        includeAiReviewed,
       })
     ) {
       eligible_for_ai++;

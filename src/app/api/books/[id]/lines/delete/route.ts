@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api/auth";
 import { lineDeleteSchema } from "@/lib/validations";
 import { deleteTaggedLines } from "@/lib/books/line-operations";
+import { createManuscriptSnapshot } from "@/lib/books/manuscript-snapshot";
 
 export async function POST(
   request: Request,
@@ -22,6 +23,10 @@ export async function POST(
   const admin = createAdminClient();
 
   try {
+    await createManuscriptSnapshot(admin, bookId, {
+      label: "Before line delete",
+      source: "pre_delete",
+    });
     const result = await deleteTaggedLines(admin, bookId, parsed.data.line_ids);
     return NextResponse.json(result);
   } catch (e) {

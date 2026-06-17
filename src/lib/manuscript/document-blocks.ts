@@ -26,7 +26,7 @@ export function buildDocumentBlocks(
   lines: LineSlice[],
   sourceParagraphs?: string[]
 ): DocumentBlock[] {
-  if (lines.length === 0) return [];
+  if (!lines?.length) return [];
 
   const sorted = [...lines].sort((a, b) => a.line_order - b.line_order);
   const byPara = new Map<number, LineSlice[]>();

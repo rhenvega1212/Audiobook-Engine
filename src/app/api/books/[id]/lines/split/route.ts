@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api/auth";
 import { lineSplitSchema } from "@/lib/validations";
 import { splitTaggedLine } from "@/lib/books/line-operations";
+import { ensureEditCheckpoint } from "@/lib/books/manuscript-snapshot";
 
 export async function POST(
   request: Request,
@@ -22,6 +23,7 @@ export async function POST(
   const admin = createAdminClient();
 
   try {
+    await ensureEditCheckpoint(admin, bookId);
     const result = await splitTaggedLine(
       admin,
       bookId,

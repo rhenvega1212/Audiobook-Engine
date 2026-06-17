@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server";
 import { listAuthUsers } from "@/lib/auth/list-users";
 import { isSuperAdmin } from "@/lib/auth/admin";
 import {
@@ -6,13 +6,11 @@ import {
   listTeamManagerGrants,
 } from "@/lib/auth/team-managers";
 import { PageHeader } from "@/components/layout/page-header";
+import { Card, CardContent } from "@/components/ui/card";
 import { AdminUsersClient } from "./admin-users-client";
 
 export default async function AdminUsersPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getServerUser();
 
   const { users, error } = await listAuthUsers();
   const grants = await listTeamManagerGrants();
@@ -26,8 +24,23 @@ export default async function AdminUsersPage() {
     <>
       <PageHeader
         title="Team access"
-        description="Create accounts and reset passwords. Use Production app in the sidebar for books and voices."
+        description="Invite teammates — every account gets full access to all books, characters, and manuscript work."
       />
+      <Card className="mb-6 border-teal/30 bg-teal/5">
+        <CardContent className="py-4 text-body-sm text-slate space-y-2">
+          <p>
+            <strong className="text-ink">Shared workspace.</strong> Books are not
+            private per person. When you add someone here, they sign in and see the
+            same dashboard, speaker studio, and cleanup tools as you.
+          </p>
+          <p>
+            Edits go straight to the shared database. Teammates see your changes
+            after a refresh (or when they open a book again). The &ldquo;Can
+            add/remove&rdquo; checkbox only controls who can manage accounts on
+            this page — not who can see books.
+          </p>
+        </CardContent>
+      </Card>
       <AdminUsersClient
         currentUserId={user!.id}
         initialUsers={users}

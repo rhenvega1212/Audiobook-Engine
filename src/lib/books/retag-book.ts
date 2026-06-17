@@ -8,7 +8,6 @@ import { resolveMatchStatus } from "@/lib/characters/match-status";
 import { updateBookStatus } from "@/lib/books/compute-book-status";
 import { runAiReviewForBook } from "@/lib/books/run-ai-review";
 import { rebuildAutoBookChapters } from "@/lib/books/book-chapters";
-import { fetchSourceParagraphs } from "@/lib/books/manuscript-source";
 import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
 import {
   chapterParagraphIndices,
@@ -74,11 +73,7 @@ async function runRetag(
     throw new Error("No manuscript lines to tag. Run import analysis first.");
   }
 
-  const sourceParagraphs = await fetchSourceParagraphs(admin, bookId);
-  const paragraphs = paragraphsFromLines(
-    existingLines,
-    sourceParagraphs ?? undefined
-  );
+  const paragraphs = paragraphsFromLines(existingLines);
   if (paragraphs.length === 0) {
     throw new Error("Manuscript has no text left after cleanup.");
   }

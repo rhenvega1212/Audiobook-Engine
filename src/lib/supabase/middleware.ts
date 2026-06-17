@@ -3,6 +3,17 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getHomePathForEmail, isAdminEmail } from "@/lib/auth/admin-edge";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 
+function clearSupabaseAuthCookies(
+  request: NextRequest,
+  response: NextResponse
+) {
+  for (const { name } of request.cookies.getAll()) {
+    if (name.startsWith("sb-")) {
+      response.cookies.set(name, "", { maxAge: 0, path: "/" });
+    }
+  }
+}
+
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
@@ -27,9 +38,22 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  let user: Awaited<
+    ReturnType<typeof supabase.auth.getUser>
+  >["data"]["user"] = null;
+
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    if (error) {
+      clearSupabaseAuthCookies(request, supabaseResponse);
+    } else {
+      user = data.user;
+    }
+  } catch {
+    // Supabase unreachable or stale session — don't block page loads.
+    clearSupabaseAuthCookies(request, supabaseResponse);
+    user = null;
+  }
 
   const pathname = request.nextUrl.pathname;
   const isAuthRoute =

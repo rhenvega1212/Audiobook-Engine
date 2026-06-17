@@ -27,6 +27,8 @@ export async function POST(
 
   let maxScenes = 12;
   let includeAiReviewed = false;
+  let fullScrub = false;
+  let respectHumanReviewed = true;
   let scope: AiReviewScope = { type: "flagged" };
   let chapters: BookChapterRow[] = [];
   let processedIndices: number[] = [];
@@ -37,6 +39,8 @@ export async function POST(
       maxScenes = Math.min(body.max_scenes, 30);
     }
     if (body.include_ai_reviewed === true) includeAiReviewed = true;
+    if (body.full_scrub === true) fullScrub = true;
+    if (body.respect_human_reviewed === false) respectHumanReviewed = false;
     if (body.scope?.type === "chapter" && body.scope.chapter_id) {
       scope = { type: "chapter", chapterId: body.scope.chapter_id };
     }
@@ -67,6 +71,8 @@ export async function POST(
     const result = await previewAiReviewForBook(admin, id, apiKey, {
       maxScenes,
       includeAiReviewed,
+      respectHumanReviewed,
+      fullScrub,
       scope,
       chapters,
       processedIndices,

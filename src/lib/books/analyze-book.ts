@@ -9,6 +9,7 @@ import { isValidNewCharacter } from "@/lib/engine/unknown-speaker";
 import { findCharacterBySpeaker } from "@/lib/characters/resolve-character";
 import { resolveMatchStatus } from "@/lib/characters/match-status";
 import { updateBookStatus } from "@/lib/books/compute-book-status";
+import { createManuscriptSnapshot } from "@/lib/books/manuscript-snapshot";
 import { runAiReviewForBook } from "@/lib/books/run-ai-review";
 import { rebuildAutoBookChapters } from "@/lib/books/book-chapters";
 import type { Character } from "@/lib/types/database";
@@ -213,6 +214,11 @@ async function runAnalysis(
   }
 
   let status = await updateBookStatus(admin, bookId);
+
+  await createManuscriptSnapshot(admin, bookId, {
+    label: "After import",
+    source: "after_import",
+  });
 
   let aiReview: Awaited<ReturnType<typeof runAiReviewForBook>> | null = null;
   const shouldRunAi =

@@ -1,4 +1,5 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import type { User } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
 export async function createClient() {
@@ -24,4 +25,16 @@ export async function createClient() {
       },
     }
   );
+}
+
+/** Returns null when logged out, session is invalid, or Supabase is unreachable. */
+export async function getServerUser(): Promise<User | null> {
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase.auth.getUser();
+    if (error) return null;
+    return data.user;
+  } catch {
+    return null;
+  }
 }

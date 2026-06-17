@@ -4,8 +4,15 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { Loader2, MoreVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Table,
   TableBody,
@@ -33,6 +40,7 @@ import {
 import { BookStatusBadge, CastStatusBadge } from "@/lib/books/status-badge";
 import { runBatchAiReviewPreview } from "@/lib/books/run-ai-review-client";
 import { AiReviewPreviewDialog } from "@/components/books/ai-review-preview-dialog";
+import type { SpeakerCharacter } from "@/components/books/speaker-select";
 import type { AiReviewProposal } from "@/lib/books/ai-review-proposals";
 import type { AiReviewEligibilityStats } from "@/lib/books/ai-review-eligibility";
 import type { BookChapterRow } from "@/lib/books/book-chapters";
@@ -42,6 +50,7 @@ import { CharacterCastActions } from "@/components/books/character-cast-actions"
 import type { BookStatus, Character } from "@/lib/types/database";
 import { voiceAssignmentsFromCharacters } from "@/lib/elevenlabs/voice-picker-utils";
 import { displayBookTitle } from "@/lib/books/display-title";
+import { saveBookCheckpoint } from "@/lib/books/save-checkpoint-client";
 import type { DetectedCharacter } from "@/lib/characters/match-status";
 
 const ANALYSIS_STAGES = [
@@ -94,6 +103,7 @@ export function BookDetailClient({
   const [aiReviewMessage, setAiReviewMessage] = useState("");
   const [linesCharacter, setLinesCharacter] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [reimportOpen, setReimportOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [aiReviewOpen, setAiReviewOpen] = useState(false);
   const [aiIncludeReviewed, setAiIncludeReviewed] = useState(false);
@@ -107,10 +117,35 @@ export function BookDetailClient({
   const [aiEligibility, setAiEligibility] =
     useState<AiReviewEligibilityStats | null>(null);
   const [aiEligibilitySummary, setAiEligibilitySummary] = useState("");
+  const [snapshots, setSnapshots] = useState<
+    {
+      id: string;
+      label: string;
+      source: string;
+      line_count: number;
+      created_at: string;
+    }[]
+  >([]);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [restoreTargetId, setRestoreTargetId] = useState<string | undefined>();
+  const [saveCheckpointBusy, setSaveCheckpointBusy] = useState(false);
 
   const displayTitle = displayBookTitle(book.title);
   const seriesVoiceAssignments = useMemo(
     () => voiceAssignmentsFromCharacters(roster),
+    [roster]
+  );
+
+  const speakerRoster = useMemo(
+    (): SpeakerCharacter[] =>
+      roster.map((c) => ({
+        id: c.id,
+        canonical_name: c.canonical_name,
+        aliases: c.aliases ?? [],
+        elevenlabs_voice_id: c.elevenlabs_voice_id,
+        elevenlabs_voice_name: c.elevenlabs_voice_name,
+      })),
     [roster]
   );
 
@@ -162,6 +197,27 @@ export function BookDetailClient({
       cancelled = true;
     };
   }, [bookId, aiReviewLoading]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`/api/books/${bookId}/snapshots`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled) {
+          setSnapshots(
+            Array.isArray((data as { snapshots?: unknown }).snapshots)
+              ? ((data as { snapshots: typeof snapshots }).snapshots ?? [])
+              : []
+          );
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setSnapshots([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId, aiReviewLoading, restoreBusy, saveCheckpointBusy]);
 
   useEffect(() => {
     if (!analyzing) {
@@ -281,6 +337,53 @@ export function BookDetailClient({
     router.refresh();
   }
 
+  async function saveRestorePoint() {
+    setSaveCheckpointBusy(true);
+    try {
+      const snap = await saveBookCheckpoint(bookId, "Manual restore point");
+      toast.success(`Restore point saved (${snap.line_count.toLocaleString()} lines)`);
+      router.refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaveCheckpointBusy(false);
+    }
+  }
+
+  function promptRestore(snapshotId?: string) {
+    setRestoreTargetId(snapshotId);
+    setRestoreOpen(true);
+  }
+
+  async function confirmRestore() {
+    setRestoreBusy(true);
+    try {
+      const res = await fetch(`/api/books/${bookId}/snapshots`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "restore",
+          snapshot_id: restoreTargetId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error ?? "Restore failed");
+      }
+      const snap = (data as { snapshot?: { label?: string } }).snapshot;
+      toast.success(
+        `Restored ${(data as { restored?: number }).restored?.toLocaleString() ?? "?"} lines from “${snap?.label ?? "checkpoint"}”`
+      );
+      setRestoreOpen(false);
+      setRestoreTargetId(undefined);
+      router.refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Restore failed");
+    } finally {
+      setRestoreBusy(false);
+    }
+  }
+
   async function undoAiReview() {
     setAiUndoBusy(true);
     try {
@@ -360,14 +463,63 @@ export function BookDetailClient({
               <BookStatusBadge status={book.status as BookStatus} />
             </div>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="shrink-0 text-dark-red hover:text-dark-red hover:bg-dark-red/10"
-            onClick={() => setDeleteOpen(true)}
-          >
-            Delete project
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="shrink-0 h-9 w-9 text-slate hover:text-ink"
+                aria-label="Advanced and destructive actions"
+              >
+                <MoreVertical className="h-5 w-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              {lineCount > 0 && (
+                <DropdownMenuItem
+                  disabled={analyzing || aiReviewLoading}
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    setAiReviewOpen(true);
+                  }}
+                >
+                  {flaggedCount > 0
+                    ? "Review speakers with AI…"
+                    : "Re-review speakers with AI…"}
+                </DropdownMenuItem>
+              )}
+              {aiUndoAvailable && (
+                <DropdownMenuItem
+                  disabled={analyzing || aiReviewLoading || aiUndoBusy}
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    setAiUndoOpen(true);
+                  }}
+                >
+                  Undo last AI review…
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                disabled={analyzing || aiReviewLoading}
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setReimportOpen(true);
+                }}
+              >
+                Re-import from Word…
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-dark-red focus:text-dark-red focus:bg-dark-red/10"
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setDeleteOpen(true);
+                }}
+              >
+                Delete project…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
         {analyzing && (
           <div className="mt-4 rounded-lg border border-teal/30 bg-teal/5 px-4 py-4 space-y-3 max-w-xl">
@@ -399,7 +551,7 @@ export function BookDetailClient({
                 {aiReviewProgress}%
               </span>
             </div>
-            <Progress value={aiReviewProgress} className="h-2" />
+            <Progress value={aiReviewProgress} active className="h-2.5" />
             <p className="text-body-sm text-slate">
               Claude is reviewing flagged dialogue in batches. This may take a
               few minutes for a large manuscript — the bar advances as each batch
@@ -409,8 +561,9 @@ export function BookDetailClient({
         )}
         {book.status === "uploaded" && detectedCharacters.length === 0 && (
           <p className="mt-4 rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-body-sm text-ink">
-            Manuscript is saved but analysis has not finished. Click{" "}
-            <strong>Re-run analysis</strong> — usually 30–60 seconds for a full novel.
+            Manuscript is saved but analysis has not finished. Open the{" "}
+            <strong>⋮ menu</strong> and choose <strong>Re-import from Word</strong>{" "}
+            — usually 30–60 seconds for a full novel.
           </p>
         )}
         <div className="mt-4 flex flex-wrap gap-2">
@@ -420,39 +573,6 @@ export function BookDetailClient({
           <Button asChild variant="secondary" size="sm">
             <Link href={`/books/${bookId}/manuscript`}>Speaker studio</Link>
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={rerunAnalysis}
-            disabled={analyzing || aiReviewLoading}
-            title="Re-imports from the original Word file — undoes manual deletions"
-          >
-            {analyzing ? "Analyzing…" : "Re-import from Word"}
-          </Button>
-          {lineCount > 0 && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setAiReviewOpen(true)}
-              disabled={analyzing || aiReviewLoading}
-            >
-              {aiReviewLoading
-                ? "Running AI review…"
-                : flaggedCount > 0
-                  ? "Review speakers with AI"
-                  : "Re-review speakers with AI"}
-            </Button>
-          )}
-          {aiUndoAvailable && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setAiUndoOpen(true)}
-              disabled={analyzing || aiReviewLoading || aiUndoBusy}
-            >
-              Undo last AI review
-            </Button>
-          )}
         </div>
         {lineCount > 0 && (
           <Card className="mt-4 max-w-xl border-teal/20">
@@ -597,8 +717,9 @@ export function BookDetailClient({
             </CardHeader>
             <CardContent className="space-y-2">
               <p className="text-body-sm text-slate mb-2">
-                Clean up in document view, then assign speakers and voices in the
-                studio.
+                Clean up back matter in document view, then refine speakers in the
+                studio with AI and manual review. Initial speaker assignment runs
+                once at import.
               </p>
               <Button asChild className="w-full">
                 <Link href={`/books/${bookId}/cleanup`}>Cleanup (document view)</Link>
@@ -632,6 +753,72 @@ export function BookDetailClient({
                   All clear — ready to export.
                 </p>
               )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-h3">Restore points</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-body-sm text-slate">
+                Checkpoints save automatically before edits, AI review, and line
+                deletes. Restore speakers, flags, and line text if something goes
+                wrong.
+              </p>
+              {snapshots.length > 0 ? (
+                <ul className="text-body-sm space-y-1 max-h-32 overflow-y-auto">
+                  {snapshots.slice(0, 5).map((s) => (
+                    <li
+                      key={s.id}
+                      className="flex items-center justify-between gap-2"
+                    >
+                      <span className="truncate">
+                        {s.label}{" "}
+                        <span className="text-slate">
+                          ({s.line_count.toLocaleString()} lines)
+                        </span>
+                      </span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 shrink-0 text-xs"
+                        disabled={restoreBusy}
+                        onClick={() => promptRestore(s.id)}
+                      >
+                        Restore
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-body-sm text-slate italic">
+                  No restore points yet — saved at import and before edits.
+                </p>
+              )}
+              <div className="flex flex-col gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={saveCheckpointBusy || lineCount === 0}
+                  onClick={() => void saveRestorePoint()}
+                >
+                  {saveCheckpointBusy ? "Saving…" : "Save restore point now"}
+                </Button>
+                {snapshots.length > 0 && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="w-full"
+                    disabled={restoreBusy}
+                    onClick={() => promptRestore()}
+                  >
+                    Restore latest checkpoint
+                  </Button>
+                )}
+              </div>
             </CardContent>
           </Card>
 
@@ -701,14 +888,69 @@ export function BookDetailClient({
         onOpenChange={(open) => !open && setLinesCharacter(null)}
       />
 
+      <Dialog open={reimportOpen} onOpenChange={setReimportOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Re-import from Word?</DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-3 text-body-sm pt-1">
+                <p>
+                  This rebuilds the entire manuscript from your original{" "}
+                  <strong>.docx file</strong> and runs speaker assignment again
+                  from scratch.
+                </p>
+                <ul className="list-disc pl-5 space-y-1 text-slate">
+                  <li>
+                    <strong className="text-ink">Removes</strong> cleanup deletions
+                    (recipes, back matter you deleted)
+                  </li>
+                  <li>
+                    <strong className="text-ink">Replaces</strong> manual speaker
+                    edits, flags cleared in Review, and line splits
+                  </li>
+                  <li>
+                    Usually takes 30–90 seconds — save a restore point first if
+                    you want a rollback option
+                  </li>
+                </ul>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => setReimportOpen(false)}
+              disabled={analyzing}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="default"
+              className="bg-dark-red hover:bg-dark-red/90"
+              disabled={analyzing}
+              onClick={() => {
+                setReimportOpen(false);
+                void rerunAnalysis();
+              }}
+            >
+              {analyzing ? "Analyzing…" : "Re-import from Word"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Delete project?</DialogTitle>
-            <DialogDescription>
-              This permanently removes <strong>{displayTitle}</strong>, its
-              manuscript, tagged lines, and casting progress. This cannot be
-              undone.
+            <DialogDescription asChild>
+              <div className="space-y-2 text-body-sm pt-1">
+                <p>
+                  This permanently removes <strong>{displayTitle}</strong>, its
+                  manuscript, tagged lines, casting progress, and restore points.
+                </p>
+                <p className="text-slate">This cannot be undone.</p>
+              </div>
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">
@@ -832,9 +1074,36 @@ export function BookDetailClient({
         progress={aiReviewProgress}
         progressMessage={aiReviewMessage}
         eligibility={aiEligibility}
+        characters={speakerRoster}
+        onCharacterCreated={() => router.refresh()}
         onOpenChange={setAiPreviewOpen}
         onApplied={handleAiApplied}
       />
+
+      <Dialog open={restoreOpen} onOpenChange={setRestoreOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Restore manuscript checkpoint?</DialogTitle>
+            <DialogDescription>
+              Overwrites speaker assignments, flags, and line text for every line
+              that still exists from the saved checkpoint. Lines added after that
+              checkpoint are kept as-is. Save a new restore point first if you
+              want to keep today&apos;s work.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setRestoreOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void confirmRestore()}
+              disabled={restoreBusy}
+            >
+              {restoreBusy ? "Restoring…" : "Restore"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={aiUndoOpen} onOpenChange={setAiUndoOpen}>
         <DialogContent className="max-w-md">

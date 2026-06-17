@@ -19,6 +19,9 @@ export async function GET(
   const { id } = await params;
   const url = new URL(request.url);
   const includeAiReviewed = url.searchParams.get("include_ai_reviewed") === "1";
+  const fullScrub = url.searchParams.get("full_scrub") === "1";
+  const respectHumanReviewed =
+    url.searchParams.get("respect_human_reviewed") !== "0";
   const chapterId = url.searchParams.get("chapter_id");
 
   let scope: AiReviewScope = { type: "flagged" };
@@ -41,7 +44,7 @@ export async function GET(
     lines,
     scope,
     (chapters ?? []) as BookChapterRow[],
-    includeAiReviewed
+    { includeAiReviewed, respectHumanReviewed, fullScrub }
   );
 
   return NextResponse.json({

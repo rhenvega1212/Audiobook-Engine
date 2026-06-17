@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api/auth";
 import { lineBulkUpdateSchema } from "@/lib/validations";
 import { updateBookStatus } from "@/lib/books/compute-book-status";
+import { ensureEditCheckpoint } from "@/lib/books/manuscript-snapshot";
 
 export async function POST(
   request: Request,
@@ -27,6 +28,9 @@ export async function POST(
     ...(fields.speaker_label != null ? { human_reviewed: true } : {}),
   };
 
+  const admin = createAdminClient();
+  await ensureEditCheckpoint(admin, bookId);
+
   const supabase = await createClient();
   const { data, error: dbError } = await supabase
     .from("tagged_lines")
@@ -39,7 +43,6 @@ export async function POST(
     return NextResponse.json({ error: dbError.message }, { status: 500 });
   }
 
-  const admin = createAdminClient();
   const status = await updateBookStatus(admin, bookId);
 
   return NextResponse.json({

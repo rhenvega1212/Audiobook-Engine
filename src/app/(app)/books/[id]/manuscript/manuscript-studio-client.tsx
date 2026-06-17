@@ -9,6 +9,7 @@ import {
   useTransition,
 } from "react";
 import Link from "next/link";
+import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -74,6 +75,16 @@ import {
   chaptersFromRecords,
   type BookChapterRow,
 } from "@/lib/books/book-chapters";
+import { SaveCheckpointButton } from "@/components/books/save-checkpoint-button";
+import {
+  AiReviewSetupDialog,
+  type AiReviewLaunchOptions,
+} from "@/components/books/ai-review-setup-dialog";
+import { AiReviewPreviewDialog } from "@/components/books/ai-review-preview-dialog";
+import { runBatchAiReviewPreview } from "@/lib/books/run-ai-review-client";
+import type { AiReviewProposal } from "@/lib/books/ai-review-proposals";
+import type { AiReviewEligibilityStats } from "@/lib/books/ai-review-eligibility";
+import type { AiReviewScope } from "@/lib/books/ai-review-scope";
 
 function areSelectedLinesAdjacent(
   allLines: ManuscriptLine[],
@@ -207,6 +218,16 @@ export function ManuscriptStudioClient({
   const [missingSpeechTagCount, setMissingSpeechTagCount] = useState(
     initialMissingSpeechTagCount
   );
+  const [aiSetupOpen, setAiSetupOpen] = useState(false);
+  const [aiPreviewOpen, setAiPreviewOpen] = useState(false);
+  const [aiPreviewLoading, setAiPreviewLoading] = useState(false);
+  const [aiReviewLoading, setAiReviewLoading] = useState(false);
+  const [aiReviewProgress, setAiReviewProgress] = useState(0);
+  const [aiReviewMessage, setAiReviewMessage] = useState("");
+  const [aiProposals, setAiProposals] = useState<AiReviewProposal[]>([]);
+  const [aiEligibility, setAiEligibility] =
+    useState<AiReviewEligibilityStats | null>(null);
+  const [aiRespectHuman, setAiRespectHuman] = useState(true);
   const jumpInputRef = useRef<HTMLInputElement>(null);
   const lastSelectedIndexRef = useRef<number | null>(null);
 
@@ -239,6 +260,18 @@ export function ManuscriptStudioClient({
     if (chapterFilter === MANUSCRIPT_FULL_ID) return null;
     return chapters.find((c) => c.id === chapterFilter) ?? null;
   }, [chapters, chapterFilter]);
+
+  const aiScope = useMemo((): AiReviewScope => {
+    if (chapterFilter !== MANUSCRIPT_FULL_ID) {
+      return { type: "chapter", chapterId: chapterFilter };
+    }
+    return { type: "flagged" };
+  }, [chapterFilter]);
+
+  const aiScopeLabelText = useMemo(() => {
+    if (activeChapter) return `Chapter: ${activeChapter.title}`;
+    return "Whole book";
+  }, [activeChapter]);
 
   const chapterScopedLines = useMemo(
     () => filterLinesByChapter(lines, activeChapter),
@@ -285,6 +318,18 @@ export function ManuscriptStudioClient({
     const flagged = countUnresolvedFlags(lines);
     return { total: lines.length, excluded, flagged };
   }, [lines]);
+
+  const speakerRoster = useMemo(
+    (): SpeakerCharacter[] =>
+      rosterCharacters.map((c) => ({
+        id: c.id,
+        canonical_name: c.canonical_name,
+        aliases: c.aliases ?? [],
+        elevenlabs_voice_id: c.elevenlabs_voice_id,
+        elevenlabs_voice_name: c.elevenlabs_voice_name,
+      })),
+    [rosterCharacters]
+  );
 
   useEffect(() => {
     if (!initialLineId || chapters.length === 0) return;
@@ -409,7 +454,14 @@ export function ManuscriptStudioClient({
     );
   }
 
-  function handleSelect(lineId: string, shiftKey: boolean) {
+  function handleHighlightLine(lineId: string) {
+    const index = filtered.findIndex((l) => l.id === lineId);
+    if (index < 0) return;
+    setHighlightLineId(lineId);
+    lastSelectedIndexRef.current = index;
+  }
+
+  function handleToggleSelect(lineId: string, shiftKey: boolean) {
     const index = filtered.findIndex((l) => l.id === lineId);
     if (index < 0) return;
 
@@ -436,7 +488,17 @@ export function ManuscriptStudioClient({
     lastSelectedIndexRef.current = index;
   }
 
-  function handleSelectBlock(block: SpeakerBlock<ManuscriptLine>, shiftKey: boolean) {
+  function handleHighlightBlock(block: SpeakerBlock<ManuscriptLine>) {
+    const index = blocks.findIndex((b) => b.key === block.key);
+    if (index < 0) return;
+    setHighlightLineId(block.lines[0]!.id);
+    lastSelectedIndexRef.current = index;
+  }
+
+  function handleToggleSelectBlock(
+    block: SpeakerBlock<ManuscriptLine>,
+    shiftKey: boolean
+  ) {
     const index = blocks.findIndex((b) => b.key === block.key);
     if (index < 0) return;
     setHighlightLineId(block.lines[0]!.id);
@@ -593,6 +655,56 @@ export function ManuscriptStudioClient({
     }
     setPickerChar(char);
     setPickerSamples([line.line_text]);
+  }
+
+  async function launchAiReview(options: AiReviewLaunchOptions) {
+    setAiSetupOpen(false);
+    setAiPreviewOpen(true);
+    setAiPreviewLoading(true);
+    setAiProposals([]);
+    setAiReviewLoading(true);
+    setAiReviewProgress(3);
+    setAiReviewMessage("Reading scenes from Word file…");
+    setAiRespectHuman(options.respectHumanReviewed);
+
+    try {
+      const result = await runBatchAiReviewPreview(
+        bookId,
+        ({ message, progress }) => {
+          setAiReviewMessage(message);
+          setAiReviewProgress(progress);
+        },
+        {
+          scope: options.scope,
+          chapters: bookChapters,
+          includeAiReviewed: options.includeAiReviewed,
+          respectHumanReviewed: options.respectHumanReviewed,
+          fullScrub: options.fullScrub,
+        }
+      );
+
+      setAiProposals(result.proposals);
+      setAiEligibility(result.eligibility ?? null);
+      setAiPreviewLoading(false);
+      if (result.proposals.length === 0) {
+        toast.message("No changes suggested for this scope and mode");
+      }
+    } catch (e) {
+      setAiPreviewOpen(false);
+      toast.error(e instanceof Error ? e.message : "AI preview failed");
+    } finally {
+      setAiReviewLoading(false);
+      setAiPreviewLoading(false);
+    }
+  }
+
+  function handleAiApplied(applied: number) {
+    toast.success(
+      applied > 0
+        ? `Applied ${applied} speaker update${applied === 1 ? "" : "s"}`
+        : "No changes applied"
+    );
+    router.refresh();
   }
 
   function openChapterDialog() {
@@ -1071,15 +1183,16 @@ export function ManuscriptStudioClient({
         </Link>
         <h1 className="font-serif text-h1 mt-3">Speaker studio</h1>
         <p className="mt-2 text-body-sm text-slate max-w-2xl">
-          Line-by-line speaker and voice editing. To remove recipes or back matter
-          in a document view, use{" "}
+          Line-by-line speaker and voice editing. Use the checkbox to select lines
+          for merge, delete, or bulk actions; click line text to focus. To remove
+          back matter, use{" "}
           <Link
             href={`/books/${bookId}/cleanup`}
             className="text-burgundy underline underline-offset-2"
           >
             Manuscript cleanup
           </Link>
-          . Highlight text to split lines; shift-click to select ranges.
+          . Highlight text to split lines.
         </p>
         <p className="mt-2 text-body-sm text-slate tabular-nums">
           {stats.total.toLocaleString()} lines ·{" "}
@@ -1188,6 +1301,23 @@ export function ManuscriptStudioClient({
         </div>
 
         <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={aiReviewLoading || lines.length === 0}
+            onClick={() => setAiSetupOpen(true)}
+          >
+            {aiReviewLoading ? "Running AI review…" : "Review lines with AI"}
+          </Button>
+          <SaveCheckpointButton
+            bookId={bookId}
+            defaultLabel={
+              activeChapter
+                ? `Speaker studio — ${activeChapter.title}`
+                : "Speaker studio progress"
+            }
+          />
           <Button type="button" variant="outline" size="sm" onClick={selectAllFiltered}>
             Select all shown
           </Button>
@@ -1213,6 +1343,20 @@ export function ManuscriptStudioClient({
             </Button>
           )}
         </div>
+        {aiReviewLoading && !aiPreviewOpen && (
+          <div className="mt-3 rounded-lg border border-burgundy/30 bg-burgundy/5 px-4 py-3 space-y-2 max-w-xl">
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin text-burgundy shrink-0" />
+              <p className="text-body-sm text-burgundy flex-1">
+                {aiReviewMessage || "Claude is reviewing…"}
+              </p>
+              <span className="text-body-sm text-slate tabular-nums">
+                {aiReviewProgress}%
+              </span>
+            </div>
+            <Progress value={aiReviewProgress} active className="h-2.5" />
+          </div>
+        )}
       </div>
 
       <div className="flex flex-1 min-h-0 gap-4 flex-col lg:flex-row">
@@ -1268,7 +1412,8 @@ export function ManuscriptStudioClient({
               isSaving={block.line_ids.some((id) => savingIds.has(id))}
               isPlaying={block.line_ids.includes(playingId ?? "")}
               isPlayLoading={block.line_ids.some((id) => loadingId === id)}
-              onSelect={handleSelectBlock}
+              onHighlight={handleHighlightBlock}
+              onSelect={handleToggleSelectBlock}
               onSpeakerChange={handleBlockSpeakerChange}
               onToggleExclude={handleBlockToggleExclude}
               onPlay={handleBlockPlay}
@@ -1293,7 +1438,8 @@ export function ManuscriptStudioClient({
               isSaving={savingIds.has(line.id)}
               isPlaying={playingId === line.id}
               isPlayLoading={loadingId === line.id}
-              onSelect={handleSelect}
+              onHighlight={handleHighlightLine}
+              onSelect={handleToggleSelect}
               onSpeakerChange={handleSpeakerChange}
               onToggleExclude={handleToggleExclude}
               onClearFlag={handleClearFlag}
@@ -1429,6 +1575,31 @@ export function ManuscriptStudioClient({
           </div>
         </DialogContent>
       </Dialog>
+
+      <AiReviewSetupDialog
+        bookId={bookId}
+        open={aiSetupOpen}
+        onOpenChange={setAiSetupOpen}
+        scope={aiScope}
+        scopeLabel={aiScopeLabelText}
+        onLaunch={(opts) => void launchAiReview(opts)}
+        busy={aiReviewLoading}
+      />
+
+      <AiReviewPreviewDialog
+        bookId={bookId}
+        open={aiPreviewOpen}
+        onOpenChange={setAiPreviewOpen}
+        proposals={aiProposals}
+        eligibility={aiEligibility}
+        loading={aiPreviewLoading}
+        progress={aiReviewProgress}
+        progressMessage={aiReviewMessage}
+        respectHumanReviewed={aiRespectHuman}
+        characters={speakerRoster}
+        onCharacterCreated={handleCharacterCreated}
+        onApplied={handleAiApplied}
+      />
 
       {pickerChar && (
         <VoicePickerDialog

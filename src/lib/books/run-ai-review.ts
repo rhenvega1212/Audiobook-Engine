@@ -51,6 +51,8 @@ export type RunAiReviewOptions = {
   maxScenes?: number;
   createSnapshot?: boolean;
   includeAiReviewed?: boolean;
+  respectHumanReviewed?: boolean;
+  fullScrub?: boolean;
   scope?: AiReviewScope;
   chapters?: BookChapterRow[];
   previewOnly?: boolean;
@@ -134,7 +136,11 @@ export async function previewAiReviewForBook(
     ctx.dbLines,
     scope,
     chapters,
-    options?.includeAiReviewed === true
+    {
+      includeAiReviewed: options?.includeAiReviewed === true,
+      respectHumanReviewed: options?.respectHumanReviewed !== false,
+      fullScrub: options?.fullScrub === true,
+    }
   );
   const eligible = eligibleLineIndices(ctx.dbLines, scope, chapters);
   const previewProcessed = new Set(options?.processedIndices ?? []);
@@ -143,6 +149,8 @@ export async function previewAiReviewForBook(
   const passOptions = {
     previewOnly: true as const,
     includeAiReviewed: options?.includeAiReviewed,
+    respectHumanReviewed: options?.respectHumanReviewed,
+    fullScrub: options?.fullScrub,
     eligibleIndices: eligible,
     previewProcessed,
     paragraphNums: ctx.dbLines.map((l) => l.paragraph_num),
@@ -196,7 +204,7 @@ export async function applyAiReviewProposals(
   admin: SupabaseClient,
   bookId: string,
   items: AiReviewApplyItem[],
-  options?: { createSnapshot?: boolean }
+  options?: { createSnapshot?: boolean; respectHumanReviewed?: boolean }
 ) {
   const accepted = items.filter((i) => i.accept);
   if (accepted.length === 0) {
@@ -230,10 +238,11 @@ export async function applyAiReviewProposals(
 
   let applied = 0;
   let linesCleared = 0;
+  const respectHuman = options?.respectHumanReviewed !== false;
 
   for (const item of accepted) {
     const dbLine = dbLines?.find((l) => l.id === item.line_id);
-    if (!dbLine || dbLine.human_reviewed) continue;
+    if (!dbLine || (respectHuman && dbLine.human_reviewed)) continue;
 
     const char = findCharacterBySpeaker(item.speaker, (chars ?? []) as Character[]);
     const hadFlag = !!dbLine.flag_reason;
@@ -314,6 +323,8 @@ export async function runAiReviewForBook(
     {
       maxScenes: options?.maxScenes,
       includeAiReviewed: options?.includeAiReviewed,
+      respectHumanReviewed: options?.respectHumanReviewed,
+      fullScrub: options?.fullScrub,
       eligibleIndices: eligible,
       paragraphNums: ctx.dbLines.map((l) => l.paragraph_num),
       sourceParagraphs: ctx.sourceParagraphs ?? undefined,
@@ -339,7 +350,7 @@ export async function runAiReviewForBook(
     const dbLine = ctx.dbLines[globalIdx];
     if (!updated || !dbLine) return;
 
-    if (dbLine.human_reviewed) {
+    if (options?.respectHumanReviewed !== false && dbLine.human_reviewed) {
       linesSkippedHuman++;
       return;
     }

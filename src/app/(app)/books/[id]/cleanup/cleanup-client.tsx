@@ -13,15 +13,9 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Loader2 } from "lucide-react";
 import { ManuscriptChapterNav } from "@/components/manuscript/manuscript-chapter-nav";
+import { VirtualManuscriptList } from "@/components/manuscript/virtual-manuscript-list";
 import {
   buildDocumentBlocks,
   type DocumentBlock,
@@ -40,44 +34,47 @@ import {
 export function CleanupClient({
   bookId,
   bookTitle,
-  initialLines,
-  initialBookChapters = [],
-  sourceParagraphs,
 }: {
   bookId: string;
   bookTitle: string;
-  initialLines: ManuscriptLine[];
-  initialBookChapters?: BookChapterRow[];
-  sourceParagraphs?: string[];
 }) {
   const router = useRouter();
-  const [lines, setLines] = useState(initialLines);
-  const [bookChapters, setBookChapters] =
-    useState<BookChapterRow[]>(initialBookChapters);
+  const [lines, setLines] = useState<ManuscriptLine[]>([]);
+  const [bookChapters, setBookChapters] = useState<BookChapterRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [chapterFilter, setChapterFilter] = useState(MANUSCRIPT_FULL_ID);
   const [search, setSearch] = useState("");
   const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(
     new Set()
   );
   const [busy, setBusy] = useState(false);
-  const [retagOpen, setRetagOpen] = useState(false);
-  const [retagAi, setRetagAi] = useState(false);
-  const [retagProgress, setRetagProgress] = useState(0);
   const lastSelectedBlockRef = useRef<number | null>(null);
-  const docRef = useRef<HTMLDivElement>(null);
+
+  const loadManuscript = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const res = await fetch(`/api/books/${bookId}/cleanup`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error ?? "Failed to load");
+      }
+      const payload = data as { lines?: ManuscriptLine[]; chapters?: BookChapterRow[] };
+      setLines(Array.isArray(payload.lines) ? payload.lines : []);
+      setBookChapters(Array.isArray(payload.chapters) ? payload.chapters : []);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Failed to load manuscript");
+    } finally {
+      setLoading(false);
+    }
+  }, [bookId]);
 
   useEffect(() => {
-    setLines(initialLines);
-  }, [initialLines]);
+    void loadManuscript();
+  }, [loadManuscript]);
 
-  useEffect(() => {
-    setBookChapters(initialBookChapters);
-  }, [initialBookChapters]);
-
-  const blocks = useMemo(
-    () => buildDocumentBlocks(lines, sourceParagraphs),
-    [lines, sourceParagraphs]
-  );
+  const blocks = useMemo(() => buildDocumentBlocks(lines), [lines]);
 
   const chapters = useMemo(() => {
     if (bookChapters.length > 0) {
@@ -162,9 +159,6 @@ export function CleanupClient({
   function handleChapterChange(chapterId: string) {
     setChapterFilter(chapterId);
     clearSelection();
-    requestAnimationFrame(() => {
-      docRef.current?.scrollTo({ top: 0, behavior: "auto" });
-    });
   }
 
   async function deleteSelected() {
@@ -234,39 +228,6 @@ export function CleanupClient({
     }
   }
 
-  async function confirmRetag() {
-    setBusy(true);
-    setRetagProgress(12);
-    const tick = window.setInterval(() => {
-      setRetagProgress((p) => (p < 88 ? p + 6 : p));
-    }, 400);
-
-    try {
-      const res = await fetch(`/api/books/${bookId}/retag`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ run_ai_review: retagAi }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error((data as { error?: string }).error ?? "Re-tag failed");
-      }
-      setRetagProgress(100);
-      toast.success(
-        `Assigned readers — ${(data as { total_lines?: number }).total_lines?.toLocaleString() ?? "?"} lines, ${(data as { flagged_count?: number }).flagged_count?.toLocaleString() ?? "?"} flagged`
-      );
-      setRetagOpen(false);
-      router.push(`/books/${bookId}/manuscript`);
-      router.refresh();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Re-tag failed");
-    } finally {
-      window.clearInterval(tick);
-      setBusy(false);
-      setRetagProgress(0);
-    }
-  }
-
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (
@@ -301,13 +262,13 @@ export function CleanupClient({
         <p className="text-body-sm text-slate mt-1 max-w-3xl">
           Read the book like a document. Click paragraphs to select — recipes,
           back matter, and other-books lists — then delete. When the text is
-          clean, assign readers to split dialogue and tag speakers.
+          clean, open Speaker studio to refine speakers with AI and manual
+          review.
         </p>
         <p className="text-body-sm text-slate mt-2">
-          {stats.lines.toLocaleString()} lines · {stats.paragraphs.toLocaleString()}{" "}
-          paragraphs · showing {stats.showing.toLocaleString()}
-          {stats.chapters > 0 && ` · ${stats.chapters} chapters`}
-          {activeChapter && ` · ${activeChapter.title}`}
+          {loading
+            ? "Loading manuscript…"
+            : `${stats.lines.toLocaleString()} lines · ${stats.paragraphs.toLocaleString()} paragraphs · showing ${stats.showing.toLocaleString()}${stats.chapters > 0 ? ` · ${stats.chapters} chapters` : ""}${activeChapter ? ` · ${activeChapter.title}` : ""}`}
         </p>
 
         <div className="mt-3 flex flex-wrap gap-2 items-end">
@@ -323,16 +284,8 @@ export function CleanupClient({
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <Button asChild variant="outline" size="sm" className="h-9">
+          <Button asChild size="sm" className="h-9">
             <Link href={`/books/${bookId}/manuscript`}>Speaker studio →</Link>
-          </Button>
-          <Button
-            size="sm"
-            className="h-9"
-            disabled={busy || lines.length === 0}
-            onClick={() => setRetagOpen(true)}
-          >
-            Assign readers & split lines
           </Button>
         </div>
       </div>
@@ -382,88 +335,67 @@ export function CleanupClient({
           />
         )}
 
-        <div
-          ref={docRef}
-          className="flex-1 min-h-0 overflow-y-auto overscroll-contain rounded-lg border border-border-muted bg-cream px-4 sm:px-8 py-6"
-          style={{ WebkitOverflowScrolling: "touch" }}
-        >
-          <article className="max-w-3xl mx-auto font-serif text-[1.05rem] leading-relaxed text-ink selection:bg-burgundy/20">
-            {filteredBlocks.length === 0 ? (
-              <p className="text-slate text-body-sm">No paragraphs match.</p>
-            ) : (
-              filteredBlocks.map((block, index) => {
+        <div className="flex-1 min-h-0 rounded-lg border border-border-muted bg-cream px-4 sm:px-8 py-6">
+          {loading ? (
+            <div className="flex flex-col items-center justify-center h-full gap-3 text-slate">
+              <Loader2 className="h-7 w-7 animate-spin text-teal" />
+              <p className="text-body-sm">Loading paragraphs…</p>
+            </div>
+          ) : loadError ? (
+            <div className="flex flex-col items-center justify-center h-full gap-3 text-slate">
+              <p className="text-body-sm text-dark-red">{loadError}</p>
+              <Button size="sm" variant="outline" onClick={() => void loadManuscript()}>
+                Retry
+              </Button>
+            </div>
+          ) : filteredBlocks.length === 0 ? (
+            <p className="text-slate text-body-sm text-center py-12">
+              No paragraphs match.
+            </p>
+          ) : (
+            <VirtualManuscriptList
+              className="h-full"
+              items={filteredBlocks}
+              scrollKey={`${chapterFilter}-${search}`}
+              scrollToIndex={0}
+              rowHeight={72}
+              renderRow={(block, index) => {
                 const selected = selectedBlockIds.has(block.id);
                 return (
-                  <p
-                    key={block.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) =>
-                      handleSelectBlock(block, index, e.shiftKey)
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        handleSelectBlock(block, index, e.shiftKey);
+                  <article className="max-w-3xl mx-auto font-serif text-[1.05rem] leading-relaxed text-ink selection:bg-burgundy/20">
+                    <p
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) =>
+                        handleSelectBlock(block, index, e.shiftKey)
                       }
-                    }}
-                    className={`mb-4 cursor-pointer rounded-sm px-1 -mx-1 transition-colors ${
-                      block.isHeading
-                        ? "text-xl font-semibold mt-8 first:mt-0"
-                        : ""
-                    } ${
-                      selected
-                        ? "bg-burgundy/15 ring-1 ring-burgundy/40"
-                        : block.excluded_from_export
-                          ? "opacity-50 line-through decoration-slate/40"
-                          : "hover:bg-warm-sand/40"
-                    }`}
-                  >
-                    {block.text}
-                  </p>
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleSelectBlock(block, index, e.shiftKey);
+                        }
+                      }}
+                      className={`mb-4 cursor-pointer rounded-sm px-1 -mx-1 transition-colors ${
+                        block.isHeading
+                          ? "text-xl font-semibold mt-8 first:mt-0"
+                          : ""
+                      } ${
+                        selected
+                          ? "bg-burgundy/15 ring-1 ring-burgundy/40"
+                          : block.excluded_from_export
+                            ? "opacity-50 line-through decoration-slate/40"
+                            : "hover:bg-warm-sand/40"
+                      }`}
+                    >
+                      {block.text}
+                    </p>
+                  </article>
                 );
-              })
-            )}
-          </article>
+              }}
+            />
+          )}
         </div>
       </div>
-
-      <Dialog open={retagOpen} onOpenChange={(o) => !busy && setRetagOpen(o)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Assign readers & split lines?</DialogTitle>
-            <DialogDescription>
-              This splits dialogue, assigns speakers, and rebuilds chapters from
-              the <strong>{stats.paragraphs.toLocaleString()} paragraphs</strong>{" "}
-              left in your manuscript. Your deletions are kept — the original
-              Word file is not re-imported.
-            </DialogDescription>
-          </DialogHeader>
-          <label className="flex items-center gap-2 text-body-sm cursor-pointer">
-            <input
-              type="checkbox"
-              checked={retagAi}
-              onChange={(e) => setRetagAi(e.target.checked)}
-              className="rounded"
-            />
-            Also run AI review on flagged lines (slower)
-          </label>
-          {busy && (
-            <div className="space-y-2">
-              <Progress value={retagProgress} className="h-2" />
-              <p className="text-body-sm text-slate">Tagging speakers…</p>
-            </div>
-          )}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" disabled={busy} onClick={() => setRetagOpen(false)}>
-              Cancel
-            </Button>
-            <Button disabled={busy} onClick={() => void confirmRetag()}>
-              {busy ? "Working…" : "Assign readers"}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

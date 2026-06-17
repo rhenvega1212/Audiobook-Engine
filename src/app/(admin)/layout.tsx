@@ -1,6 +1,9 @@
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server";
 import { canAccessAdminArea } from "@/lib/auth/team-managers";
+import { isSuperAdmin } from "@/lib/auth/admin";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { countOpenIssueReports } from "@/lib/issues/reports";
 import { AdminShell } from "@/components/layout/admin-shell";
 
 export default async function AdminLayout({
@@ -8,10 +11,7 @@ export default async function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getServerUser();
 
   if (!user) {
     redirect("/login");
@@ -21,5 +21,18 @@ export default async function AdminLayout({
     redirect("/dashboard");
   }
 
-  return <AdminShell userEmail={user.email ?? ""}>{children}</AdminShell>;
+  let openIssueCount = 0;
+  if (isSuperAdmin(user.email)) {
+    try {
+      openIssueCount = await countOpenIssueReports(createAdminClient());
+    } catch {
+      openIssueCount = 0;
+    }
+  }
+
+  return (
+    <AdminShell userEmail={user.email ?? ""} openIssueCount={openIssueCount}>
+      {children}
+    </AdminShell>
+  );
 }

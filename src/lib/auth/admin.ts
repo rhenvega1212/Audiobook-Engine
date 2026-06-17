@@ -1,4 +1,3 @@
-import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 export {
   getAdminEmails,
@@ -11,15 +10,12 @@ import {
   canManageTeam,
   isSuperAdmin,
 } from "@/lib/auth/team-managers";
+import { getServerUser } from "@/lib/supabase/server";
 
 export async function requireAdmin() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser();
+  const user = await getServerUser();
 
-  if (error || !user) {
+  if (!user) {
     return {
       user: null,
       error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
@@ -37,13 +33,9 @@ export async function requireAdmin() {
 }
 
 export async function requireAdminAccess() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser();
+  const user = await getServerUser();
 
-  if (error || !user) {
+  if (!user) {
     return {
       user: null,
       error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
@@ -61,13 +53,9 @@ export async function requireAdminAccess() {
 }
 
 export async function requireTeamManage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser();
+  const user = await getServerUser();
 
-  if (error || !user) {
+  if (!user) {
     return {
       user: null,
       error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),

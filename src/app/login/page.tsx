@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server";
 import { getHomePathForEmail } from "@/lib/auth/admin";
 import { LoginForm } from "./login-form";
 import { Card, CardContent } from "@/components/ui/card";
@@ -9,10 +9,7 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{ error?: string }>;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getServerUser();
 
   if (user) {
     redirect(getHomePathForEmail(user.email));

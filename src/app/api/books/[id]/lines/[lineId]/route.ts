@@ -4,6 +4,19 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api/auth";
 import { lineUpdateSchema } from "@/lib/validations";
 import { updateBookStatus } from "@/lib/books/compute-book-status";
+import { ensureEditCheckpoint } from "@/lib/books/manuscript-snapshot";
+
+function isProtectedEdit(payload: Record<string, unknown>): boolean {
+  return (
+    payload.flag_reason !== undefined ||
+    payload.human_reviewed === true ||
+    payload.speaker_label !== undefined ||
+    payload.speaker_character_id !== undefined ||
+    payload.line_text !== undefined ||
+    payload.excluded_from_export !== undefined ||
+    payload.spoken_text !== undefined
+  );
+}
 
 export async function POST(
   request: Request,
@@ -43,6 +56,11 @@ export async function POST(
     payload.flag_reason === undefined
   ) {
     updates.flag_reason = null;
+  }
+
+  if (isProtectedEdit(updates)) {
+    const admin = createAdminClient();
+    await ensureEditCheckpoint(admin, id);
   }
 
   const { data, error: dbError } = await supabase

@@ -6,8 +6,12 @@ export type TaggedLineForAi = TaggedLine & {
 };
 
 export type AiPassOptions = {
-  /** Re-process lines Claude already reviewed (still skips human_reviewed). */
+  /** Re-process lines Claude already reviewed (still skips human_reviewed unless fullScrub). */
   includeAiReviewed?: boolean;
+  /** When false, includes human_reviewed lines (raw scrub). Default true. */
+  respectHumanReviewed?: boolean;
+  /** Review every line in scope, not only flagged / uncertain. */
+  fullScrub?: boolean;
   /** Global indices Claude may change (scope filter). */
   eligibleIndices?: Set<number>;
   /** Lines already handled in this preview run (avoids duplicate batches). */
@@ -28,8 +32,15 @@ export function isSettledAiAssignment(line: TaggedLineForAi): boolean {
 export function shouldProposeSpeakerChange(
   line: TaggedLineForAi,
   oldSpeaker: string,
-  newSpeaker: string
+  newSpeaker: string,
+  options?: Pick<AiPassOptions, "fullScrub" | "respectHumanReviewed">
 ): boolean {
+  if (
+    options?.fullScrub === true &&
+    options?.respectHumanReviewed === false
+  ) {
+    return true;
+  }
   if (oldSpeaker === newSpeaker) return true;
   if (
     newSpeaker !== "Narrator" ||
@@ -51,11 +62,18 @@ export function lineNeedsAiPass(
   globalIndex: number,
   options?: AiPassOptions
 ): boolean {
-  if (line.human_reviewed) return false;
+  if (options?.respectHumanReviewed !== false && line.human_reviewed) {
+    return false;
+  }
   if (options?.previewProcessed?.has(globalIndex)) return false;
   if (options?.eligibleIndices && !options.eligibleIndices.has(globalIndex)) {
     return false;
   }
+
+  if (options?.fullScrub) {
+    return true;
+  }
+
   if (isSettledAiAssignment(line)) return false;
   if (options?.includeAiReviewed && line.ai_reviewed) {
     return (
@@ -63,6 +81,13 @@ export function lineNeedsAiPass(
       line.speaker === "UNKNOWN" ||
       line.confidence !== "high"
     );
+  }
+  if (
+    !line.ai_reviewed &&
+    line.confidence !== "high" &&
+    line.speaker !== "Narrator"
+  ) {
+    return true;
   }
   return !!line.flag_reason && !line.ai_reviewed;
 }
