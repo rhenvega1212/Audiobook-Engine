@@ -5,6 +5,7 @@ import { requireAdmin } from "@/lib/auth/admin";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   countOpenIssueReports,
+  ensureIssueReportsBucket,
   signedScreenshotUrl,
 } from "@/lib/issues/reports";
 import type { IssueReportRow } from "@/lib/issues/types";
@@ -97,6 +98,22 @@ export async function POST(request: Request) {
   }
 
   const admin = createAdminClient();
+
+  try {
+    await ensureIssueReportsBucket(admin);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Storage setup failed";
+    return NextResponse.json(
+      {
+        error:
+          message.includes("Bucket not found") || message.includes("bucket")
+            ? "Issue report storage is not set up yet. Ask your admin to run the issue_reports migration in Supabase."
+            : message,
+      },
+      { status: 500 }
+    );
+  }
+
   const reportId = crypto.randomUUID();
   const ext =
     screenshot.type === "image/png"
@@ -136,7 +153,12 @@ export async function POST(request: Request) {
 
   if (insertError) {
     await admin.storage.from("issue-reports").remove([storagePath]);
-    return NextResponse.json({ error: insertError.message }, { status: 500 });
+    const message =
+      insertError.message.includes("issue_reports") &&
+      insertError.message.includes("does not exist")
+        ? "Issue reports table is not set up yet. Run supabase/migrations/20250617000002_issue_reports.sql in the Supabase SQL editor."
+        : insertError.message;
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 
   return NextResponse.json({ id: row.id, created_at: row.created_at }, { status: 201 });
