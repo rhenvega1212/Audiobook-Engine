@@ -1,4 +1,5 @@
 import { AdminSidebar } from "./admin-sidebar";
+import { ReportIssueButton } from "@/components/issues/report-issue-button";
 
 export function AdminShell({
   userEmail,
@@ -17,6 +18,7 @@ export function AdminShell({
           {children}
         </main>
       </div>
+      <ReportIssueButton />
     </div>
   );
 }

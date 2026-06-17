@@ -141,7 +141,16 @@ export async function restoreManuscriptSnapshot(
   bookId: string,
   snapshotId?: string
 ): Promise<{ restored: number; snapshot: ManuscriptSnapshotMeta }> {
-  let snap: { id: string; label: string; source: string; line_count: number; created_at: string; lines: ManuscriptSnapshotLine[] } | null = null;
+  type SnapRow = {
+    id: string;
+    label: string;
+    source: string;
+    line_count: number;
+    created_at: string;
+    lines: ManuscriptSnapshotLine[];
+  };
+
+  let snap: SnapRow;
 
   if (snapshotId) {
     const { data, error } = await admin
@@ -153,7 +162,7 @@ export async function restoreManuscriptSnapshot(
     if (error || !data) {
       throw new Error("Restore point not found.");
     }
-    snap = data as typeof snap;
+    snap = data as SnapRow;
   } else {
     const { data, error } = await admin
       .from("book_manuscript_snapshots")
@@ -165,7 +174,7 @@ export async function restoreManuscriptSnapshot(
     if (error || !data) {
       throw new Error("No restore point saved yet.");
     }
-    snap = data as typeof snap;
+    snap = data as SnapRow;
   }
 
   const lines = snap.lines as ManuscriptSnapshotLine[];

@@ -9,6 +9,8 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { AdminUsersClient } from "./admin-users-client";
 
+export const dynamic = "force-dynamic";
+
 export default async function AdminUsersPage() {
   const user = await getServerUser();
 
@@ -42,7 +44,7 @@ export default async function AdminUsersPage() {
         </CardContent>
       </Card>
       <AdminUsersClient
-        currentUserId={user!.id}
+        currentUserId={user?.id ?? ""}
         initialUsers={users}
         initialError={error}
         teamManagerIds={Array.from(managerIds)}

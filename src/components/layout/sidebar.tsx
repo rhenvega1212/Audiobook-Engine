@@ -19,6 +19,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "./sidebar-context";
+import { ReportIssueNavButton, OPEN_REPORT_ISSUE_EVENT } from "@/components/issues/report-issue-button";
 
 const navItems = [
   { href: "/dashboard", label: "Books", icon: BookOpen },
@@ -155,6 +156,7 @@ export function SidebarDesktop({
             </Link>
           );
         })}
+        <ReportIssueNavButton collapsed={isCollapsed} />
         {showTeamAccess && (
           <Link
             href="/admin/users"
@@ -285,6 +287,15 @@ export function SidebarMobile({
               {item.label}
             </Link>
           ))}
+          <button
+            type="button"
+            className="block w-full px-4 py-2 text-left text-sm text-ink hover:bg-warm-sand"
+            onClick={() =>
+              window.dispatchEvent(new CustomEvent(OPEN_REPORT_ISSUE_EVENT))
+            }
+          >
+            Report issue
+          </button>
           {showTeamAccess && (
             <Link
               href="/admin/users"

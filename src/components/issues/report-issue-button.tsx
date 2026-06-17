@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { Camera, Loader2, X } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,13 +19,52 @@ import {
   pageLabelFromPath,
 } from "@/lib/issues/types";
 
+export const OPEN_REPORT_ISSUE_EVENT = "audiobook:open-report-issue";
+
+export function ReportIssueNavButton({
+  collapsed = false,
+  className,
+}: {
+  collapsed?: boolean;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      title="Report issue"
+      onClick={() => window.dispatchEvent(new CustomEvent(OPEN_REPORT_ISSUE_EVENT))}
+      className={cn(
+        "flex items-center rounded-md py-2 text-sm font-medium transition-colors text-slate hover:bg-warm-sand hover:text-ink w-full",
+        collapsed ? "justify-center px-2" : "gap-3 px-3",
+        className
+      )}
+    >
+      <Camera className="h-4 w-4 shrink-0" />
+      {!collapsed && "Report issue"}
+    </button>
+  );
+}
+
 export function ReportIssueButton() {
   const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const [description, setDescription] = useState("");
   const [screenshot, setScreenshot] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    function onOpenRequest() {
+      setOpen(true);
+    }
+    window.addEventListener(OPEN_REPORT_ISSUE_EVENT, onOpenRequest);
+    return () => window.removeEventListener(OPEN_REPORT_ISSUE_EVENT, onOpenRequest);
+  }, []);
 
   const context = useMemo(() => {
     if (!open || typeof window === "undefined") return null;
@@ -108,18 +149,25 @@ export function ReportIssueButton() {
     }
   }
 
-  return (
-    <>
+  const floatingButton =
+    mounted &&
+    createPortal(
       <Button
         type="button"
         size="lg"
-        className="fixed bottom-6 right-6 z-40 h-12 rounded-full shadow-lg gap-2 px-4 bg-burgundy hover:bg-dark-red"
+        className="fixed bottom-6 right-6 z-[9999] h-12 rounded-full shadow-lg gap-2 px-4 bg-burgundy hover:bg-dark-red pointer-events-auto"
         onClick={() => setOpen(true)}
         aria-label="Report an issue"
       >
         <Camera className="h-4 w-4 shrink-0" />
         <span className="hidden sm:inline">Report issue</span>
-      </Button>
+      </Button>,
+      document.body
+    );
+
+  return (
+    <>
+      {floatingButton}
 
       <Dialog open={open} onOpenChange={(o) => !submitting && setOpen(o)}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
