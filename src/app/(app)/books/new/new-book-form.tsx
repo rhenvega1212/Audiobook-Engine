@@ -44,9 +44,9 @@ export function NewBookForm({
     ? seriesList.filter((s) => s.pen_name_id === penNameId)
     : seriesList;
 
-  async function createSeries() {
+  async function createSeries(): Promise<Series | null> {
     const name = newSeriesName.trim();
-    if (!penNameId || !name) return;
+    if (!penNameId || !name) return null;
     setSavingSeries(true);
     try {
       const res = await fetch("/api/series", {
@@ -59,7 +59,7 @@ export function NewBookForm({
         toast.error(
           (data as { error?: string }).error ?? "Could not create series"
         );
-        return;
+        return null;
       }
       const created = data as Series;
       setSeriesList((prev) => [...prev, created]);
@@ -67,8 +67,10 @@ export function NewBookForm({
       setNewSeriesName("");
       setCreatingSeries(false);
       toast.success(`Series "${created.name}" created`);
+      return created;
     } catch {
       toast.error("Could not create series");
+      return null;
     } finally {
       setSavingSeries(false);
     }
@@ -85,12 +87,44 @@ export function NewBookForm({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!file || !seriesId || !title) return;
+
+    if (!penNameId) {
+      toast.error("Select a pen name first");
+      return;
+    }
+
+    if (!title.trim()) {
+      toast.error("Enter a book title");
+      return;
+    }
+
+    if (!file) {
+      toast.error("Choose a manuscript (.docx) file");
+      return;
+    }
+
+    // Resolve the series. If the user typed a new series name but never clicked
+    // "Save", create it now instead of silently doing nothing.
+    let effectiveSeriesId = seriesId;
+    if (!effectiveSeriesId && creatingSeries && newSeriesName.trim()) {
+      const created = await createSeries();
+      if (!created) return;
+      effectiveSeriesId = created.id;
+    }
+
+    if (!effectiveSeriesId) {
+      toast.error(
+        creatingSeries
+          ? "Enter a series name and click Save first"
+          : "Select or create a series"
+      );
+      return;
+    }
 
     setProgress(2);
     setStatusMessage("Checking series cast…");
     const readinessRes = await fetch(
-      `/api/series/${seriesId}/analyze-readiness`
+      `/api/series/${effectiveSeriesId}/analyze-readiness`
     );
     const readiness = await readinessRes.json().catch(() => ({}));
     if (!readinessRes.ok || !(readiness as { ready?: boolean }).ready) {
@@ -111,7 +145,7 @@ export function NewBookForm({
     setProgress(8);
     setStatusMessage("Uploading manuscript…");
     const formData = new FormData();
-    formData.append("series_id", seriesId);
+    formData.append("series_id", effectiveSeriesId);
     formData.append("title", title);
     formData.append("file", file);
 
