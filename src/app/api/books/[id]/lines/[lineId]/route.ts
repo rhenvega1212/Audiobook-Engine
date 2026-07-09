@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/api/auth";
 import { lineUpdateSchema } from "@/lib/validations";
 import { updateBookStatus } from "@/lib/books/compute-book-status";
 import { createUndoCheckpoint } from "@/lib/books/manuscript-snapshot";
+import { recordAttributionCorrections } from "@/lib/books/attribution-corrections";
 
 function isProtectedEdit(payload: Record<string, unknown>): boolean {
   return (
@@ -58,6 +59,35 @@ export async function POST(
     updates.flag_reason = null;
   }
 
+  const speakerEdit =
+    payload.speaker_label !== undefined ||
+    payload.speaker_character_id !== undefined;
+
+  // Snapshot the pre-edit speaker so we can persist the wrong→right correction
+  // as a teaching example before the update overwrites it.
+  let oldLine:
+    | {
+        speaker_label: string;
+        speaker_character_id: string | null;
+        line_order: number;
+        paragraph_num: number;
+        ai_reviewed: boolean | null;
+        confidence: string | null;
+        flag_reason: string | null;
+      }
+    | null = null;
+  if (speakerEdit) {
+    const { data: existing } = await supabase
+      .from("tagged_lines")
+      .select(
+        "speaker_label, speaker_character_id, line_order, paragraph_num, ai_reviewed, confidence, flag_reason"
+      )
+      .eq("id", lineId)
+      .eq("book_id", id)
+      .maybeSingle();
+    oldLine = existing;
+  }
+
   if (isProtectedEdit(updates)) {
     const admin = createAdminClient();
     await createUndoCheckpoint(admin, id, "Before line edit");
@@ -80,6 +110,24 @@ export async function POST(
 
   const admin = createAdminClient();
   const status = await updateBookStatus(admin, id);
+
+  if (speakerEdit && oldLine && oldLine.speaker_label !== data.speaker_label) {
+    await recordAttributionCorrections(admin, id, [
+      {
+        lineId,
+        lineOrder: oldLine.line_order,
+        paragraphNum: oldLine.paragraph_num,
+        lineText: data.line_text,
+        oldSpeaker: oldLine.speaker_label,
+        newSpeaker: data.speaker_label,
+        oldCharacterId: oldLine.speaker_character_id,
+        newCharacterId: data.speaker_character_id,
+        wasAiReviewed: oldLine.ai_reviewed ?? false,
+        priorConfidence: oldLine.confidence,
+        priorFlagReason: oldLine.flag_reason,
+      },
+    ]);
+  }
 
   return NextResponse.json({ ...data, book_status: status });
 }
