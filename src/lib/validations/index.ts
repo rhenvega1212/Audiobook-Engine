@@ -94,6 +94,11 @@ export const lineDeleteSchema = z.object({
   line_ids: z.array(z.string().uuid()).min(1).max(500),
 });
 
+export const lineEditParagraphSchema = z.object({
+  line_ids: z.array(z.string().uuid()).min(1).max(500),
+  text: z.string().max(20000),
+});
+
 export const lineReorderSchema = z.object({
   line_id: z.string().uuid(),
   target_line_order: z.number().int().min(0),

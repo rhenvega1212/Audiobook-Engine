@@ -56,6 +56,13 @@ export function CleanupClient({
   );
   const [busy, setBusy] = useState(false);
   const lastSelectedBlockRef = useRef<number | null>(null);
+  const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState("");
+  const [savingBlockId, setSavingBlockId] = useState<string | null>(null);
+  // Guards the textarea's onBlur save: set when we close the editor
+  // programmatically (Esc / successful save) so removing the focused element
+  // does not fire a second, unintended save (which could wipe the paragraph).
+  const closingEditRef = useRef(false);
 
   const loadManuscript = useCallback(async () => {
     setLoading(true);
@@ -166,6 +173,79 @@ export function CleanupClient({
   function clearSelection() {
     setSelectedBlockIds(new Set());
     lastSelectedBlockRef.current = null;
+  }
+
+  function startEditing(block: DocumentBlock) {
+    if (busy) return;
+    closingEditRef.current = false;
+    setEditingBlockId(block.id);
+    setEditingText(block.text);
+  }
+
+  function cancelEditing() {
+    closingEditRef.current = true;
+    setEditingBlockId(null);
+    setEditingText("");
+  }
+
+  async function commitParagraph(block: DocumentBlock) {
+    if (savingBlockId) return;
+    const newText = editingText;
+    if (newText.trim() === block.text.trim()) {
+      cancelEditing();
+      return;
+    }
+    setSavingBlockId(block.id);
+    try {
+      const res = await fetch(`/api/books/${bookId}/lines/edit-paragraph`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ line_ids: block.line_ids, text: newText }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error ?? "Save failed");
+      }
+      const {
+        kept_line_id,
+        deleted_line_ids,
+        line_text,
+        chapters,
+      } = data as {
+        kept_line_id: string | null;
+        deleted_line_ids: string[];
+        line_text: string;
+        chapters?: BookChapterRow[];
+      };
+      const deleted = new Set(deleted_line_ids ?? []);
+      setLines((prev) => {
+        let next = prev.filter((l) => !deleted.has(l.id));
+        if (kept_line_id) {
+          next = next.map((l) =>
+            l.id === kept_line_id ? { ...l, line_text } : l
+          );
+        }
+        return next
+          .sort((a, b) => a.line_order - b.line_order)
+          .map((l, i) => ({ ...l, line_order: i }));
+      });
+      if (chapters) setBookChapters(chapters);
+      cancelEditing();
+      void refreshUndoCount();
+      if (kept_line_id === null) toast.success("Paragraph removed");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSavingBlockId(null);
+    }
+  }
+
+  function handleEditorBlur(block: DocumentBlock) {
+    if (closingEditRef.current) {
+      closingEditRef.current = false;
+      return;
+    }
+    void commitParagraph(block);
   }
 
   function handleChapterChange(chapterId: string) {
@@ -283,10 +363,11 @@ export function CleanupClient({
         </Link>
         <h1 className="font-serif text-h2 mt-2">Manuscript editor</h1>
         <p className="text-body-sm text-slate mt-1 max-w-3xl">
-          Read the book like a document. Click paragraphs to select — recipes,
-          back matter, and other-books lists — then delete. When the text is
-          clean, open Speaker studio to refine speakers with AI and manual
-          review.
+          Edit the book like a document. Click any paragraph to rewrite, retype,
+          or delete text — cut, copy, and paste work as usual. Use the checkbox
+          on the left to select paragraphs (recipes, back matter, other-books
+          lists) for bulk delete or skip. When the text is clean, open Speaker
+          studio to refine speakers with AI and manual review.
         </p>
         <p className="text-body-sm text-slate mt-2">
           {loading
@@ -389,34 +470,109 @@ export function CleanupClient({
               rowHeight={72}
               renderRow={(block, index) => {
                 const selected = selectedBlockIds.has(block.id);
+                const editing = editingBlockId === block.id;
+                const saving = savingBlockId === block.id;
+                const multiLine = block.line_ids.length > 1;
                 return (
-                  <article className="max-w-3xl mx-auto font-serif text-[1.05rem] leading-relaxed text-ink selection:bg-burgundy/20">
-                    <p
-                      role="button"
-                      tabIndex={0}
-                      onClick={(e) =>
-                        handleSelectBlock(block, index, e.shiftKey)
-                      }
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          handleSelectBlock(block, index, e.shiftKey);
-                        }
-                      }}
-                      className={`mb-4 cursor-pointer rounded-sm px-1 -mx-1 transition-colors ${
-                        block.isHeading
-                          ? "text-xl font-semibold mt-8 first:mt-0"
-                          : ""
-                      } ${
-                        selected
-                          ? "bg-burgundy/15 ring-1 ring-burgundy/40"
-                          : block.excluded_from_export
-                            ? "opacity-50 line-through decoration-slate/40"
-                            : "hover:bg-warm-sand/40"
+                  <article className="group max-w-3xl mx-auto font-serif text-[1.05rem] leading-relaxed text-ink selection:bg-burgundy/20">
+                    <div
+                      className={`flex items-start gap-2 mb-4 ${
+                        block.isHeading ? "mt-8 first:mt-0" : ""
                       }`}
                     >
-                      {block.text}
-                    </p>
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        aria-label="Select paragraph"
+                        onClick={(e) =>
+                          handleSelectBlock(block, index, e.shiftKey)
+                        }
+                        onChange={() => {}}
+                        className={`mt-2 h-4 w-4 shrink-0 cursor-pointer accent-burgundy transition-opacity ${
+                          selected
+                            ? "opacity-100"
+                            : "opacity-0 group-hover:opacity-100 focus:opacity-100"
+                        }`}
+                      />
+                      {editing ? (
+                        <div className="flex-1 min-w-0">
+                          <textarea
+                            autoFocus
+                            value={editingText}
+                            disabled={saving}
+                            onChange={(e) => setEditingText(e.target.value)}
+                            ref={(el) => {
+                              if (el) {
+                                el.style.height = "auto";
+                                el.style.height = `${el.scrollHeight}px`;
+                              }
+                            }}
+                            onInput={(e) => {
+                              const el = e.currentTarget;
+                              el.style.height = "auto";
+                              el.style.height = `${el.scrollHeight}px`;
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Escape") {
+                                e.preventDefault();
+                                cancelEditing();
+                              } else if (
+                                e.key === "Enter" &&
+                                (e.metaKey || e.ctrlKey)
+                              ) {
+                                e.preventDefault();
+                                void commitParagraph(block);
+                              }
+                            }}
+                            onBlur={() => handleEditorBlur(block)}
+                            className={`w-full resize-none overflow-hidden rounded-md border border-burgundy/40 bg-white px-3 py-2 font-serif leading-relaxed text-ink shadow-sm focus:outline-none focus:ring-2 focus:ring-burgundy/30 ${
+                              block.isHeading
+                                ? "text-xl font-semibold"
+                                : "text-[1.05rem]"
+                            }`}
+                          />
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate">
+                            {saving ? (
+                              <span className="inline-flex items-center gap-1">
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                Saving…
+                              </span>
+                            ) : (
+                              <span>⌘/Ctrl+Enter to save · Esc to cancel</span>
+                            )}
+                            {multiLine && !saving && (
+                              <span className="text-burgundy/80">
+                                Merges {block.line_ids.length} lines into one
+                                voice
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <p
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => startEditing(block)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              startEditing(block);
+                            }
+                          }}
+                          className={`flex-1 min-w-0 cursor-text rounded-sm px-1 -mx-1 whitespace-pre-wrap transition-colors ${
+                            block.isHeading ? "text-xl font-semibold" : ""
+                          } ${
+                            selected
+                              ? "bg-burgundy/15 ring-1 ring-burgundy/40"
+                              : block.excluded_from_export
+                                ? "opacity-50 line-through decoration-slate/40"
+                                : "hover:bg-warm-sand/40"
+                          }`}
+                        >
+                          {block.text}
+                        </p>
+                      )}
+                    </div>
                   </article>
                 );
               }}

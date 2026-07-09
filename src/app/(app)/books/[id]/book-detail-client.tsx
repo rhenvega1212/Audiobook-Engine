@@ -630,13 +630,6 @@ export function BookDetailClient({
             </p>
           </div>
         )}
-        {book.status === "uploaded" && detectedCharacters.length === 0 && (
-          <p className="mt-4 rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-body-sm text-ink">
-            Manuscript is saved but analysis has not finished. Open the{" "}
-            <strong>⋮ menu</strong> and choose <strong>Re-import from Word</strong>{" "}
-            — usually 30–60 seconds for a full novel.
-          </p>
-        )}
         <div className="mt-4 flex flex-wrap gap-2">
           <Button asChild size="sm">
             <Link href={`/books/${bookId}/cleanup`}>Manuscript editor</Link>

@@ -603,6 +603,92 @@ export async function mergeTaggedLines(
   return { merged_line_id: first.id };
 }
 
+/**
+ * Replace the text of a document paragraph (a run of lines sharing a
+ * `paragraph_num`) with freely-edited text, keeping the paragraph as a single
+ * line under the first line's speaker.
+ *
+ * This powers the "writing doc" editing surface in the Manuscript editor: the
+ * user retypes/rewrites a paragraph and we sync it back to `tagged_lines`. The
+ * first line is kept (preserving its speaker + character link) and its text is
+ * replaced; any additional lines in the paragraph are removed. When the edited
+ * text is empty, the whole paragraph is deleted. A stale `spoken_text` override
+ * is cleared because the source text changed.
+ */
+export async function editParagraphLines(
+  admin: SupabaseClient,
+  bookId: string,
+  lineIds: string[],
+  text: string
+): Promise<{
+  kept_line_id: string | null;
+  deleted_line_ids: string[];
+  line_text: string;
+  chapters: BookChapterRow[];
+}> {
+  if (lineIds.length === 0) throw new Error("No paragraph selected");
+
+  const lines = await loadBookLines(admin, bookId);
+  const selected = lineIds
+    .map((id) => lines.find((l) => l.id === id))
+    .filter((l): l is DbLine => !!l)
+    .sort((a, b) => a.line_order - b.line_order);
+
+  if (selected.length === 0) throw new Error("Paragraph lines not found");
+
+  const trimmed = text.trim();
+  const first = selected[0]!;
+
+  // Empty edit means "remove this paragraph" — delete every line in it.
+  if (!trimmed) {
+    const result = await deleteTaggedLines(
+      admin,
+      bookId,
+      selected.map((l) => l.id)
+    );
+    return {
+      kept_line_id: null,
+      deleted_line_ids: selected.map((l) => l.id),
+      line_text: "",
+      chapters: result.chapters,
+    };
+  }
+
+  const { error: updError } = await admin
+    .from("tagged_lines")
+    .update({
+      line_text: trimmed,
+      human_reviewed: true,
+      spoken_text: null,
+      flag_reason: null,
+    })
+    .eq("id", first.id)
+    .eq("book_id", bookId);
+  if (updError) throw new Error(updError.message);
+
+  const toDelete = selected.slice(1).map((l) => l.id);
+  if (toDelete.length > 0) {
+    const { error: delError } = await admin
+      .from("tagged_lines")
+      .delete()
+      .eq("book_id", bookId)
+      .in("id", toDelete);
+    if (delError) throw new Error(delError.message);
+  }
+
+  await renumberBookLines(admin, bookId);
+  const chapters = await resyncBookChapterPositions(admin, bookId);
+  await recomputeBookCharacterCounts(admin, bookId);
+  await updateBookStatus(admin, bookId);
+
+  return {
+    kept_line_id: first.id,
+    deleted_line_ids: toDelete,
+    line_text: trimmed,
+    chapters,
+  };
+}
+
 export async function deleteTaggedLines(
   admin: SupabaseClient,
   bookId: string,
