@@ -28,6 +28,7 @@ export async function POST(
   let maxScenes = 12;
   let includeAiReviewed = false;
   let fullScrub = false;
+  let dialogueOnly = false;
   let respectHumanReviewed = true;
   let scope: AiReviewScope = { type: "flagged" };
   let chapters: BookChapterRow[] = [];
@@ -40,6 +41,7 @@ export async function POST(
     }
     if (body.include_ai_reviewed === true) includeAiReviewed = true;
     if (body.full_scrub === true) fullScrub = true;
+    if (body.dialogue_only === true) dialogueOnly = true;
     if (body.respect_human_reviewed === false) respectHumanReviewed = false;
     if (body.scope?.type === "chapter" && body.scope.chapter_id) {
       scope = { type: "chapter", chapterId: body.scope.chapter_id };
@@ -73,6 +75,7 @@ export async function POST(
       includeAiReviewed,
       respectHumanReviewed,
       fullScrub,
+      dialogueOnly,
       scope,
       chapters,
       processedIndices,

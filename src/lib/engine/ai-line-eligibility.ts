@@ -12,6 +12,12 @@ export type AiPassOptions = {
   respectHumanReviewed?: boolean;
   /** Review every line in scope, not only flagged / uncertain. */
   fullScrub?: boolean;
+  /**
+   * With fullScrub, skip pure narration (Narrator lines that aren't quoted
+   * dialogue). Used for the first-upload "review all dialogue" pass so we spend
+   * API calls on speech, not on re-reading description.
+   */
+  dialogueOnly?: boolean;
   /** Global indices Claude may change (scope filter). */
   eligibleIndices?: Set<number>;
   /** Lines already handled in this preview run (avoids duplicate batches). */
@@ -98,6 +104,26 @@ export function lineNeedsAiPass(
   }
 
   if (options?.fullScrub) {
+    if (
+      options?.dialogueOnly &&
+      line.speaker === "Narrator" &&
+      !lineLooksLikeQuotedDialogue(line)
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  // Dialogue scrub: force a first AI review of every spoken line — including the
+  // high-confidence ones the rules engine never flagged — so confidently-wrong
+  // attributions get caught on the first upload. Pure narration is left alone,
+  // and already-reviewed lines fall through to the normal rules below so the
+  // pass still terminates (unlike fullScrub, which never clears).
+  if (
+    options?.dialogueOnly &&
+    !line.ai_reviewed &&
+    !(line.speaker === "Narrator" && !lineLooksLikeQuotedDialogue(line))
+  ) {
     return true;
   }
 

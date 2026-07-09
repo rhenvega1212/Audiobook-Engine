@@ -349,6 +349,60 @@ function coalesceNarratorRuns(lines: TaggedLine[]): TaggedLine[] {
   return out;
 }
 
+/**
+ * Scan paragraphs for likely speaker names — capitalized names that sit next to
+ * a dialogue verb in a quote's attribution context (e.g. `"…," Blake said` or
+ * `Blake asked, "…"`). Used to seed the character roster BEFORE attribution so a
+ * character's very first line resolves to them instead of landing as UNKNOWN
+ * (which is what forces manual cleanup on the first upload).
+ *
+ * Returns name → number of dialogue-tag occurrences so callers can require a
+ * minimum count and ignore one-off false positives.
+ */
+export function detectSpeakerCandidates(
+  paragraphs: string[]
+): Map<string, number> {
+  const counts = new Map<string, number>();
+
+  for (const para of paragraphs) {
+    if (
+      CHAPTER_HEADING_RE.test(para) ||
+      CHAPTER_NUMBER_RE.test(para) ||
+      SCENE_BREAK_RE.test(para)
+    ) {
+      continue;
+    }
+
+    const segments = segmentParagraphByQuotes(para);
+    if (segments.length === 0) continue;
+
+    let dialogueIdx = 0;
+    for (const seg of segments) {
+      if (seg.kind === "narration") continue;
+      const attributionContext = attributionForDialogue(
+        segments,
+        dialogueIdx,
+        para
+      );
+      dialogueIdx++;
+
+      const attributionForNames =
+        stripQuotedSpansForAttribution(attributionContext);
+      const seen = new Set<string>();
+      for (const m of attributionForNames.matchAll(NAME_RE)) {
+        const name = m[1]!;
+        if (seen.has(name)) continue;
+        seen.add(name);
+        if (nameAppearsWithDialogueVerb(attributionForNames, name)) {
+          counts.set(name, (counts.get(name) ?? 0) + 1);
+        }
+      }
+    }
+  }
+
+  return counts;
+}
+
 export function processManuscriptFromParagraphs(
   paragraphs: string[],
   roster: EngineCharacter[]

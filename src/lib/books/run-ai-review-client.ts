@@ -209,6 +209,8 @@ export async function runBatchAiReview(
   options?: {
     createSnapshot?: boolean;
     includeAiReviewed?: boolean;
+    fullScrub?: boolean;
+    dialogueOnly?: boolean;
     scope?: AiReviewScope;
     chapters?: BookChapterRow[];
   }
@@ -265,6 +267,8 @@ export async function runBatchAiReview(
           max_scenes: 12,
           create_snapshot: batch === 1 && options?.createSnapshot === true,
           include_ai_reviewed: options?.includeAiReviewed === true,
+          full_scrub: options?.fullScrub === true,
+          dialogue_only: options?.dialogueOnly === true,
           scope:
             options?.scope?.type === "chapter"
               ? { type: "chapter", chapter_id: options.scope.chapterId }

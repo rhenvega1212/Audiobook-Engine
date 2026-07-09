@@ -55,6 +55,7 @@ export type RunAiReviewOptions = {
   includeAiReviewed?: boolean;
   respectHumanReviewed?: boolean;
   fullScrub?: boolean;
+  dialogueOnly?: boolean;
   scope?: AiReviewScope;
   chapters?: BookChapterRow[];
   previewOnly?: boolean;
@@ -153,6 +154,7 @@ export async function previewAiReviewForBook(
     includeAiReviewed: options?.includeAiReviewed,
     respectHumanReviewed: options?.respectHumanReviewed,
     fullScrub: options?.fullScrub,
+    dialogueOnly: options?.dialogueOnly,
     eligibleIndices: eligible,
     previewProcessed,
     paragraphNums: ctx.dbLines.map((l) => l.paragraph_num),
@@ -423,6 +425,7 @@ export async function runAiReviewForBook(
       includeAiReviewed: options?.includeAiReviewed,
       respectHumanReviewed: options?.respectHumanReviewed,
       fullScrub: options?.fullScrub,
+      dialogueOnly: options?.dialogueOnly,
       eligibleIndices: eligible,
       paragraphNums: ctx.dbLines.map((l) => l.paragraph_num),
       sourceParagraphs: ctx.sourceParagraphs ?? undefined,

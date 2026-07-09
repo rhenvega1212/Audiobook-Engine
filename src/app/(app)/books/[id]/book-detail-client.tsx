@@ -38,7 +38,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { BookStatusBadge, CastStatusBadge } from "@/lib/books/status-badge";
-import { runBatchAiReviewPreview } from "@/lib/books/run-ai-review-client";
+import {
+  runBatchAiReview,
+  runBatchAiReviewPreview,
+} from "@/lib/books/run-ai-review-client";
 import { AiReviewPreviewDialog } from "@/components/books/ai-review-preview-dialog";
 import type { SpeakerCharacter } from "@/components/books/speaker-select";
 import type {
@@ -303,6 +306,41 @@ export function BookDetailClient({
       toast.success(
         `Analysis complete — ${summary.total_lines?.toLocaleString() ?? "?"} lines, ${summary.chapter_count?.toLocaleString() ?? "?"} chapters${coveragePct ? `, ${coveragePct} preserved` : ""}, ${summary.flagged_count?.toLocaleString() ?? "?"} flagged`
       );
+
+      // Auto-run AI review after re-import so it matches first-upload accuracy
+      // instead of dropping back to rules-only attribution. Full dialogue scrub
+      // verifies every spoken line against the Word source, so run it whenever
+      // there are lines — not only when the rules pass left flags.
+      setAnalyzing(false);
+      if ((summary.total_lines ?? 0) > 0) {
+        try {
+          setAiReviewLoading(true);
+          setAiReviewProgress(3);
+          setAiReviewMessage("Reviewing flagged lines with AI…");
+          const aiResult = await runBatchAiReview(
+            bookId,
+            ({ message, progress }) => {
+              setAiReviewMessage(message);
+              setAiReviewProgress(progress);
+            },
+            summary.flagged_count,
+            { createSnapshot: true, dialogueOnly: true }
+          );
+          if ((aiResult.lines_cleared ?? 0) > 0) {
+            toast.success(
+              `AI cleared ${aiResult.lines_cleared.toLocaleString()} flagged line${aiResult.lines_cleared === 1 ? "" : "s"}`
+            );
+          }
+        } catch (e) {
+          toast.message(
+            e instanceof Error
+              ? e.message
+              : "AI review skipped — run it from the ⋮ menu"
+          );
+        } finally {
+          setAiReviewLoading(false);
+        }
+      }
       router.refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Analysis failed");

@@ -1,6 +1,9 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createEngineCharacter } from "@/lib/engine/types";
-import { processManuscriptFromParagraphs } from "@/lib/engine/rules-engine";
+import {
+  detectSpeakerCandidates,
+  processManuscriptFromParagraphs,
+} from "@/lib/engine/rules-engine";
 import {
   extractManuscriptBlocks,
   measureManuscriptCoverage,
@@ -57,10 +60,6 @@ async function runAnalysis(
     .select("*")
     .eq("series_id", book.series_id);
 
-  const roster = (chars ?? []).map((c) =>
-    createEngineCharacter(c.canonical_name, c.aliases ?? [], c.gender)
-  );
-
   if (!book.manuscript_path) throw new Error("No manuscript uploaded");
 
   const { data: fileData, error: downloadError } = await admin.storage
@@ -74,6 +73,40 @@ async function runAnalysis(
   const buffer = Buffer.from(await fileData.arrayBuffer());
   const { paragraphs, blockCount, chapterParagraphNums } =
     await extractManuscriptBlocks(buffer);
+
+  // Two-pass roster building: detect speakers from dialogue tags and create any
+  // missing characters BEFORE attribution, so a character's first line resolves
+  // to them on the first pass instead of landing as UNKNOWN. This is the main
+  // lever for cutting manual cleanup on a fresh upload.
+  const allChars: Character[] = [...((chars ?? []) as Character[])];
+  const candidates = detectSpeakerCandidates(paragraphs);
+  for (const [name, count] of candidates) {
+    if (!isValidNewCharacter(name, count)) continue;
+    const match = resolveMatchStatus(name, allChars);
+    if (match.character && match.status !== "new") continue;
+    if (
+      allChars.some(
+        (c) => c.canonical_name.toLowerCase() === name.toLowerCase()
+      )
+    ) {
+      continue;
+    }
+    const { data: newChar } = await admin
+      .from("characters")
+      .insert({
+        series_id: book.series_id,
+        canonical_name: name,
+        gender: "unknown",
+        role: "guest",
+      })
+      .select("*")
+      .single();
+    if (newChar) allChars.push(newChar as Character);
+  }
+
+  const roster = allChars.map((c) =>
+    createEngineCharacter(c.canonical_name, c.aliases ?? [], c.gender)
+  );
   const result = processManuscriptFromParagraphs(paragraphs, roster);
 
   const coverage = measureManuscriptCoverage(paragraphs, result.lines);
@@ -94,7 +127,7 @@ async function runAnalysis(
 
     if (line.speaker === "Narrator") {
       speakerLabel = "Narrator";
-      const narrator = findCharacterBySpeaker("Narrator", (chars ?? []) as Character[]);
+      const narrator = findCharacterBySpeaker("Narrator", allChars);
       if (narrator) {
         speakerCharId = narrator.id;
         lineCounts.set(narrator.id, (lineCounts.get(narrator.id) ?? 0) + 1);
@@ -102,7 +135,7 @@ async function runAnalysis(
     } else if (line.speaker === "UNKNOWN") {
       speakerLabel = "UNKNOWN";
     } else {
-      const char = findCharacterBySpeaker(line.speaker, (chars ?? []) as Character[]);
+      const char = findCharacterBySpeaker(line.speaker, allChars);
       if (char) {
         speakerCharId = char.id;
         speakerLabel = char.canonical_name;
@@ -144,7 +177,7 @@ async function runAnalysis(
     const lineCount = result.lines.filter((l) => l.speaker === unknown).length;
     if (!isValidNewCharacter(unknown, lineCount)) continue;
 
-    const match = resolveMatchStatus(unknown, (chars ?? []) as Character[]);
+    const match = resolveMatchStatus(unknown, allChars);
     if (match.character && match.status !== "new") {
       lineCounts.set(match.character.id, (lineCounts.get(match.character.id) ?? 0) + lineCount);
       continue;

@@ -121,7 +121,8 @@ export function NewBookForm({
         const aiResult = await runBatchAiReview(
           bookId,
           () => {},
-          summary.flagged_count
+          summary.flagged_count,
+          { createSnapshot: true, dialogueOnly: true }
         );
         aiCleared = aiResult.lines_cleared ?? 0;
       } catch {
