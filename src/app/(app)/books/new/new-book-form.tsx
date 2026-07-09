@@ -29,13 +29,47 @@ export function NewBookForm({
   const router = useRouter();
   const [penNameId, setPenNameId] = useState("");
   const [seriesId, setSeriesId] = useState("");
+  const [seriesList, setSeriesList] = useState<Series[]>(allSeries);
+  const [creatingSeries, setCreatingSeries] = useState(false);
+  const [newSeriesName, setNewSeriesName] = useState("");
+  const [savingSeries, setSavingSeries] = useState(false);
   const [title, setTitle] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [phase, setPhase] = useState<UploadPhase>("idle");
 
   const filteredSeries = penNameId
-    ? allSeries.filter((s) => s.pen_name_id === penNameId)
-    : allSeries;
+    ? seriesList.filter((s) => s.pen_name_id === penNameId)
+    : seriesList;
+
+  async function createSeries() {
+    const name = newSeriesName.trim();
+    if (!penNameId || !name) return;
+    setSavingSeries(true);
+    try {
+      const res = await fetch("/api/series", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pen_name_id: penNameId, name }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(
+          (data as { error?: string }).error ?? "Could not create series"
+        );
+        return;
+      }
+      const created = data as Series;
+      setSeriesList((prev) => [...prev, created]);
+      setSeriesId(created.id);
+      setNewSeriesName("");
+      setCreatingSeries(false);
+      toast.success(`Series "${created.name}" created`);
+    } catch {
+      toast.error("Could not create series");
+    } finally {
+      setSavingSeries(false);
+    }
+  }
 
   const loading =
     phase === "uploading" || phase === "analyzing" || phase === "ai_review";
@@ -159,6 +193,8 @@ export function NewBookForm({
               onValueChange={(v) => {
                 setPenNameId(v);
                 setSeriesId("");
+                setCreatingSeries(false);
+                setNewSeriesName("");
               }}
             >
               <SelectTrigger>
@@ -175,23 +211,75 @@ export function NewBookForm({
           </div>
 
           <div>
-            <Label>Series</Label>
-            <Select
-              value={seriesId}
-              onValueChange={setSeriesId}
-              disabled={!penNameId}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select series" />
-              </SelectTrigger>
-              <SelectContent>
-                {filteredSeries.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>
-                    {s.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex items-center justify-between">
+              <Label>Series</Label>
+              {penNameId && !creatingSeries && (
+                <button
+                  type="button"
+                  onClick={() => setCreatingSeries(true)}
+                  className="text-xs text-burgundy underline underline-offset-2"
+                >
+                  + New series
+                </button>
+              )}
+            </div>
+
+            {creatingSeries ? (
+              <div className="mt-1 flex gap-2">
+                <Input
+                  value={newSeriesName}
+                  onChange={(e) => setNewSeriesName(e.target.value)}
+                  placeholder="New series name"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void createSeries();
+                    }
+                  }}
+                />
+                <Button
+                  type="button"
+                  onClick={() => void createSeries()}
+                  disabled={savingSeries || !newSeriesName.trim()}
+                >
+                  {savingSeries ? "Saving…" : "Save"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setCreatingSeries(false);
+                    setNewSeriesName("");
+                  }}
+                  disabled={savingSeries}
+                >
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <Select
+                value={seriesId}
+                onValueChange={setSeriesId}
+                disabled={!penNameId}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select series" />
+                </SelectTrigger>
+                <SelectContent>
+                  {filteredSeries.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>
+                      {s.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {!penNameId && (
+              <p className="text-xs text-slate mt-1">
+                Select a pen name first to choose or create a series.
+              </p>
+            )}
           </div>
 
           <div>
