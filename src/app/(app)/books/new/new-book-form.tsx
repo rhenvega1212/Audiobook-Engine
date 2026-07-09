@@ -177,11 +177,28 @@ export function NewBookForm({
       setProgress(25);
       setStatusMessage("Tagging dialogue with rules engine…");
 
-      const analyzeRes = await fetch(`/api/books/${bookId}/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ run_ai_review: false }),
-      });
+      // The analyze request can be dropped by a transient network blip or a dev
+      // server recompile. Since the book is already saved, it is safe to retry
+      // the analyze once before surfacing a failure to the user.
+      let analyzeRes: Response | undefined;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          analyzeRes = await fetch(`/api/books/${bookId}/analyze`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ run_ai_review: false }),
+          });
+          break;
+        } catch (err) {
+          if (attempt === 0) {
+            setStatusMessage("Connection dropped — retrying analysis…");
+            await new Promise((r) => setTimeout(r, 1500));
+            continue;
+          }
+          throw err;
+        }
+      }
+      if (!analyzeRes) throw new Error("Analysis request failed");
       const analyzeData = await analyzeRes.json().catch(() => ({}));
 
       if (!analyzeRes.ok) {
@@ -236,7 +253,7 @@ export function NewBookForm({
     } catch {
       toast.error(
         bookId
-          ? "Analysis may have timed out — open the book and Re-run analysis"
+          ? "Your book was saved, but analysis didn't finish. Open the book and choose “Re-import from Word” to try again."
           : "Upload failed — try again"
       );
       if (bookId) router.push(`/books/${bookId}`);

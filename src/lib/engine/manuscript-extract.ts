@@ -137,7 +137,17 @@ export async function extractManuscriptParagraphs(
   return { paragraphs, rawText, blockCount };
 }
 
-/** Compare source paragraphs to emitted lines — flags dropped wording. */
+/**
+ * Compare source paragraphs to emitted lines — flags dropped wording.
+ *
+ * Word coverage is measured **globally** (whole-manuscript word multiset) rather
+ * than per source paragraph. The rules engine legitimately moves words across
+ * paragraph boundaries — most notably `coalesceNarratorRuns`, which merges runs
+ * of consecutive Narrator paragraphs into a single line under the first
+ * paragraph's `paragraph_num`. A strict per-paragraph bucket check treats those
+ * relocated words as "missing" and produces a large false coverage drop on
+ * narration-heavy manuscripts, even though no text was actually lost.
+ */
 export function measureManuscriptCoverage(
   paragraphs: string[],
   lines: { line: string; paragraph_num: number }[]
@@ -146,43 +156,45 @@ export function measureManuscriptCoverage(
   word_coverage: number;
   thin_paragraphs: number[];
 } {
-  const byPara = new Map<number, string[]>();
+  // Global multiset of emitted words — a word can be matched as many times as it
+  // was emitted, no more. This tolerates cross-paragraph merges while still
+  // detecting genuinely dropped text.
+  const emittedCounts = new Map<string, number>();
   for (const line of lines) {
-    const bucket = byPara.get(line.paragraph_num) ?? [];
-    bucket.push(line.line);
-    byPara.set(line.paragraph_num, bucket);
+    for (const word of normalizeWords(line.line)) {
+      emittedCounts.set(word, (emittedCounts.get(word) ?? 0) + 1);
+    }
+  }
+  const emittedSet = new Set(emittedCounts.keys());
+
+  const sourceCounts = new Map<string, number>();
+  let sourceWords = 0;
+  for (const p of paragraphs) {
+    for (const word of normalizeWords(p)) {
+      sourceCounts.set(word, (sourceCounts.get(word) ?? 0) + 1);
+      sourceWords++;
+    }
   }
 
+  let matchedWords = 0;
+  for (const [word, count] of sourceCounts) {
+    matchedWords += Math.min(count, emittedCounts.get(word) ?? 0);
+  }
+
+  // Per-paragraph diagnostic (message only): a paragraph is "thin" when its
+  // words are largely absent from the emitted output anywhere, which points at
+  // real extraction loss rather than mere relocation.
   let coveredParas = 0;
   const thin: number[] = [];
-  let sourceWords = 0;
-  let matchedWords = 0;
-
+  let nonEmpty = 0;
   for (let i = 0; i < paragraphs.length; i++) {
     const source = normalizeWords(paragraphs[i]!);
-    sourceWords += source.length;
     if (source.length === 0) continue;
-
-    const emitted = normalizeWords((byPara.get(i) ?? []).join(" "));
-    let hits = 0;
-    const used = new Set<number>();
-    for (const word of source) {
-      for (let j = 0; j < emitted.length; j++) {
-        if (!used.has(j) && emitted[j] === word) {
-          used.add(j);
-          hits++;
-          break;
-        }
-      }
-    }
-    matchedWords += hits;
-
-    const ratio = hits / source.length;
-    if (ratio >= 0.95) coveredParas++;
+    nonEmpty++;
+    const present = source.filter((w) => emittedSet.has(w)).length;
+    if (present / source.length >= 0.95) coveredParas++;
     else thin.push(i);
   }
-
-  const nonEmpty = paragraphs.filter((p) => normalizeWords(p).length > 0).length;
 
   return {
     paragraph_coverage: nonEmpty > 0 ? coveredParas / nonEmpty : 1,
