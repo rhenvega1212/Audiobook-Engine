@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Lora, Poppins, JetBrains_Mono } from "next/font/google";
-import { Toaster } from "sonner";
+import { AppProviders } from "@/components/app-providers";
 import "./globals.css";
 
 const lora = Lora({
@@ -42,7 +42,7 @@ export default function RootLayout({
         className={`${poppins.className} min-h-screen bg-cream text-ink antialiased`}
       >
         {children}
-        <Toaster position="top-right" richColors />
+        <AppProviders />
       </body>
     </html>
   );

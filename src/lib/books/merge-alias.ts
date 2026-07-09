@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { findCharacterBySpeaker } from "@/lib/characters/resolve-character";
 import type { Character } from "@/lib/types/database";
 import { updateBookStatus } from "./compute-book-status";
+import { createUndoCheckpoint } from "./manuscript-snapshot";
 
 /**
  * Add alias_name as alias of target, relink book lines, remove duplicate character row.
@@ -29,6 +30,12 @@ export async function mergeSpeakerAlias(
 
   if (!target) throw new Error("Target character not found");
 
+  // Snapshot lines + character roster so this merge can be undone (Cmd+Z),
+  // recreating the merged-away character and its voice.
+  await createUndoCheckpoint(admin, bookId, `Before merging "${aliasName.trim()}"`, {
+    includeCharacters: true,
+  });
+
   const aliasNorm = aliasName.trim();
   const aliases = new Set(target.aliases ?? []);
   if (
@@ -44,10 +51,34 @@ export async function mergeSpeakerAlias(
 
   const { data: duplicate } = await admin
     .from("characters")
-    .select("id")
+    .select("*")
     .eq("series_id", book.series_id)
     .eq("canonical_name", aliasNorm)
     .maybeSingle();
+
+  // Preserve the cast voice: if the character we're keeping (target) has no
+  // voice but the one we're about to delete (duplicate) does, carry the voice
+  // and its metadata over to the survivor so the merge never loses casting.
+  if (
+    duplicate &&
+    duplicate.id !== target.id &&
+    !target.elevenlabs_voice_id &&
+    duplicate.elevenlabs_voice_id
+  ) {
+    await admin
+      .from("characters")
+      .update({
+        elevenlabs_voice_id: duplicate.elevenlabs_voice_id,
+        elevenlabs_voice_name: duplicate.elevenlabs_voice_name,
+        voice_style: duplicate.voice_style,
+        voice_accent: duplicate.voice_accent,
+        voice_locale: duplicate.voice_locale,
+        voice_language: duplicate.voice_language,
+        voice_settings: duplicate.voice_settings,
+        voice_notes: duplicate.voice_notes,
+      })
+      .eq("id", target.id);
+  }
 
   await admin
     .from("tagged_lines")

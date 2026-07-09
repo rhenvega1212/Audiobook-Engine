@@ -42,6 +42,8 @@ export function buildDetectedCharacters(
     });
   }
 
-  detected_characters.sort((a, b) => b.line_count - a.line_count);
+  detected_characters.sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+  );
   return detected_characters;
 }

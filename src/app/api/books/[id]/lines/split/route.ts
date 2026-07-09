@@ -3,7 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api/auth";
 import { lineSplitSchema } from "@/lib/validations";
 import { splitTaggedLine } from "@/lib/books/line-operations";
-import { ensureEditCheckpoint } from "@/lib/books/manuscript-snapshot";
+import { createUndoCheckpoint } from "@/lib/books/manuscript-snapshot";
 
 export async function POST(
   request: Request,
@@ -23,7 +23,7 @@ export async function POST(
   const admin = createAdminClient();
 
   try {
-    await ensureEditCheckpoint(admin, bookId);
+    await createUndoCheckpoint(admin, bookId, "Before split");
     const result = await splitTaggedLine(
       admin,
       bookId,
@@ -33,6 +33,17 @@ export async function POST(
       {
         speaker_label: parsed.data.speaker_label,
         speaker_character_id: parsed.data.speaker_character_id,
+      },
+      {
+        merge_trailing_into_next: parsed.data.merge_trailing_into_next,
+        trailing_speaker:
+          parsed.data.trailing_speaker_label != null
+            ? {
+                speaker_label: parsed.data.trailing_speaker_label,
+                speaker_character_id:
+                  parsed.data.trailing_speaker_character_id ?? null,
+              }
+            : undefined,
       }
     );
     return NextResponse.json(result);

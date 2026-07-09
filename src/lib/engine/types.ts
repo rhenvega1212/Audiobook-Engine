@@ -30,6 +30,11 @@ export interface TaggedLine {
   paragraph_num: number;
   confidence: "high" | "medium" | "low" | "none";
   flag_reason: string | null;
+  /**
+   * Engine-internal marker: a chapter/scene heading that must never be merged
+   * into surrounding narration. Not persisted to the DB.
+   */
+  block_boundary?: boolean;
 }
 
 export interface ProcessResult {

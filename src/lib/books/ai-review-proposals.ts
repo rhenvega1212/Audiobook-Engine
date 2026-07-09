@@ -1,3 +1,5 @@
+import type { AiConfidence } from "@/lib/confidence";
+
 /** Only auto-clear flags when Claude is highly confident. */
 export function shouldClearFlagAfterApply(
   speaker: string,
@@ -44,4 +46,12 @@ export type AiReviewApplyItem = {
   speaker: string;
   confidence: string;
   accept: boolean;
+};
+
+export type AiReviewAppliedChange = {
+  line_id: string;
+  speaker_label: string;
+  speaker_character_id: string | null;
+  confidence: AiConfidence;
+  flag_reason: string | null;
 };

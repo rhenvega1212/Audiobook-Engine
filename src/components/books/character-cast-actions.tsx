@@ -55,7 +55,9 @@ export function CharacterCastActions({
       roster
         .filter(
           (c) =>
-            c.id !== detected.matched_character_id &&
+            // Exclude only the detected name itself (can't merge into itself)
+            // and the narrator. The matched/suggested character IS a valid
+            // target — confirming a possible alias is the whole point.
             c.canonical_name.toLowerCase() !== detected.name.toLowerCase() &&
             c.canonical_name.toLowerCase() !== "narrator"
         )
@@ -64,15 +66,19 @@ export function CharacterCastActions({
             sensitivity: "base",
           })
         ),
-    [roster, detected.matched_character_id, detected.name]
+    [roster, detected.name]
   );
 
   const filteredMergeTargets = useMemo(() => {
     const q = mergeSearch.trim().toLowerCase();
     if (!q) return mergeTargets;
-    return mergeTargets.filter((c) =>
-      characterMergeLabel(c).toLowerCase().includes(q)
-    );
+    // Match on the character's name and aliases — not the voice name — so
+    // searching a person's name finds that character, not characters that
+    // happen to use a voice with a similar name.
+    return mergeTargets.filter((c) => {
+      if (c.canonical_name.toLowerCase().includes(q)) return true;
+      return (c.aliases ?? []).some((a) => a.toLowerCase().includes(q));
+    });
   }, [mergeTargets, mergeSearch]);
 
   const suggestedTargetId =

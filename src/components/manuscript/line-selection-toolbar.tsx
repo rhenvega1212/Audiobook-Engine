@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import {
   SpeakerSelect,
   type SpeakerCharacter,
@@ -18,6 +19,11 @@ export function LineSelectionToolbar({
   characters,
   speakerValue,
   onSpeakerChange,
+  mergeTrailingIntoNext,
+  onMergeTrailingIntoNextChange,
+  canMergeTrailingIntoNext,
+  trailingSpeakerValue,
+  onTrailingSpeakerChange,
   onCharacterCreated,
   onSplit,
   onDismiss,
@@ -29,6 +35,11 @@ export function LineSelectionToolbar({
   characters: Pick<Character, "id" | "canonical_name">[];
   speakerValue: string;
   onSpeakerChange: (value: string, character?: SpeakerCharacter) => void;
+  mergeTrailingIntoNext: boolean;
+  onMergeTrailingIntoNextChange: (checked: boolean) => void;
+  canMergeTrailingIntoNext: boolean;
+  trailingSpeakerValue: string;
+  onTrailingSpeakerChange: (value: string, character?: SpeakerCharacter) => void;
   onCharacterCreated?: (character: SpeakerCharacter) => void;
   onSplit: () => void;
   onDismiss: () => void;
@@ -65,8 +76,9 @@ export function LineSelectionToolbar({
       </p>
       {splitInvalid && (
         <p className="text-[10px] text-dark-red w-full">
-          Can&apos;t split inside quoted dialogue — select the full line or text
-          outside quotes.
+          Can&apos;t split inside quoted dialogue — select the narration before the
+          quote, the full quoted line (with quote marks), or use &quot;Move dialogue
+          to next line&quot; below.
         </p>
       )}
       <SpeakerSelect
@@ -79,6 +91,39 @@ export function LineSelectionToolbar({
         onCharacterCreated={onCharacterCreated}
         onValueChange={(value, character) => onSpeakerChange(value, character)}
       />
+      {canMergeTrailingIntoNext && (
+        <div className="flex flex-col gap-2 w-full border-t border-burgundy/15 pt-2">
+          <div className="flex items-center gap-2">
+            <input
+              id="merge-trailing"
+              type="checkbox"
+              checked={mergeTrailingIntoNext}
+              onChange={(e) => onMergeTrailingIntoNextChange(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-burgundy/40 accent-burgundy"
+            />
+            <Label htmlFor="merge-trailing" className="text-[10px] font-normal">
+              Merge dialogue into line below (instead of new line)
+            </Label>
+          </div>
+          {mergeTrailingIntoNext && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] text-slate">Dialogue voice:</span>
+              <SpeakerSelect
+                bookId={bookId}
+                size="compact"
+                includeUnknown
+                className="w-[11rem]"
+                value={trailingSpeakerValue}
+                characters={characters as SpeakerCharacter[]}
+                onCharacterCreated={onCharacterCreated}
+                onValueChange={(value, character) =>
+                  onTrailingSpeakerChange(value, character)
+                }
+              />
+            </div>
+          )}
+        </div>
+      )}
       <Button
         type="button"
         size="sm"

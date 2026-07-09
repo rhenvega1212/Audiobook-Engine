@@ -30,6 +30,8 @@ import {
   chaptersFromRecords,
   type BookChapterRow,
 } from "@/lib/books/book-chapters";
+import { UndoEditButton } from "@/components/manuscript/undo-edit-button";
+import { useManuscriptUndo } from "@/lib/manuscript/use-manuscript-undo";
 
 export function CleanupClient({
   bookId,
@@ -39,6 +41,10 @@ export function CleanupClient({
   bookTitle: string;
 }) {
   const router = useRouter();
+  const { undoCount, undoBusy, applyUndo, refreshUndoCount } = useManuscriptUndo(
+    bookId,
+    0
+  );
   const [lines, setLines] = useState<ManuscriptLine[]>([]);
   const [bookChapters, setBookChapters] = useState<BookChapterRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -72,7 +78,13 @@ export function CleanupClient({
 
   useEffect(() => {
     void loadManuscript();
-  }, [loadManuscript]);
+    void refreshUndoCount();
+  }, [loadManuscript, refreshUndoCount]);
+
+  async function handleUndo() {
+    const ok = await applyUndo();
+    if (ok) void loadManuscript();
+  }
 
   const blocks = useMemo(() => buildDocumentBlocks(lines), [lines]);
 
@@ -187,6 +199,7 @@ export function CleanupClient({
       toast.success(
         `Removed ${selectedLineIds.length.toLocaleString()} lines from the manuscript`
       );
+      void refreshUndoCount();
       router.refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Delete failed");
@@ -221,6 +234,7 @@ export function CleanupClient({
       toast.success(
         excluded ? "Marked selection as skip export" : "Included in export"
       );
+      void refreshUndoCount();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Update failed");
     } finally {
@@ -234,6 +248,15 @@ export function CleanupClient({
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement
       ) {
+        return;
+      }
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key.toLowerCase() === "z" &&
+        !e.shiftKey
+      ) {
+        e.preventDefault();
+        void handleUndo();
         return;
       }
       if (e.key === "Escape") clearSelection();
@@ -258,7 +281,7 @@ export function CleanupClient({
         >
           ← {bookTitle}
         </Link>
-        <h1 className="font-serif text-h2 mt-2">Manuscript cleanup</h1>
+        <h1 className="font-serif text-h2 mt-2">Manuscript editor</h1>
         <p className="text-body-sm text-slate mt-1 max-w-3xl">
           Read the book like a document. Click paragraphs to select — recipes,
           back matter, and other-books lists — then delete. When the text is
@@ -272,6 +295,11 @@ export function CleanupClient({
         </p>
 
         <div className="mt-3 flex flex-wrap gap-2 items-end">
+          <UndoEditButton
+            undoCount={undoCount}
+            busy={undoBusy}
+            onUndo={() => void handleUndo()}
+          />
           <div className="flex-1 min-w-[12rem] max-w-md">
             <Label htmlFor="cleanup-search" className="text-xs">
               Search

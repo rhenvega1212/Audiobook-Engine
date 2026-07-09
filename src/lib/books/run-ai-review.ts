@@ -16,8 +16,10 @@ import {
   createAiReviewSnapshot,
   getLatestAiReviewSnapshot,
 } from "./ai-review-snapshot";
+import { normalizeAiConfidence } from "@/lib/confidence";
 import {
   type AiReviewApplyItem,
+  type AiReviewAppliedChange,
   type AiReviewProposal,
   flagReasonAfterApply,
   shouldClearFlagAfterApply,
@@ -204,11 +206,22 @@ export async function applyAiReviewProposals(
   admin: SupabaseClient,
   bookId: string,
   items: AiReviewApplyItem[],
-  options?: { createSnapshot?: boolean; respectHumanReviewed?: boolean }
+  options?: {
+    createSnapshot?: boolean;
+    respectHumanReviewed?: boolean;
+    updateBookStatus?: boolean;
+  }
 ) {
   const accepted = items.filter((i) => i.accept);
   if (accepted.length === 0) {
-    return { applied: 0, lines_cleared: 0, status: await updateBookStatus(admin, bookId) };
+    return {
+      applied: 0,
+      lines_cleared: 0,
+      changes: [] as AiReviewAppliedChange[],
+      status: options?.updateBookStatus === false
+        ? undefined
+        : await updateBookStatus(admin, bookId),
+    };
   }
 
   let snapshotId: string | null = null;
@@ -217,66 +230,151 @@ export async function applyAiReviewProposals(
     snapshotId = snap?.id ?? null;
   }
 
+  const { data: book } = await admin
+    .from("books")
+    .select("series_id")
+    .eq("id", bookId)
+    .single();
+  if (!book) throw new Error("Book not found");
+
   const { data: chars } = await admin
     .from("characters")
     .select("*")
-    .eq(
-      "series_id",
-      (
-        await admin.from("books").select("series_id").eq("id", bookId).single()
-      ).data?.series_id ?? ""
-    );
+    .eq("series_id", book.series_id);
 
-  const acceptSet = new Set(accepted.map((a) => a.line_id));
-  const { data: dbLines } = await admin
-    .from("tagged_lines")
-    .select(
-      "id, speaker_label, flag_reason, human_reviewed, confidence, ai_reviewed"
-    )
-    .eq("book_id", bookId)
-    .in("id", [...acceptSet]);
+  type DbLine = {
+    id: string;
+    speaker_label: string;
+    flag_reason: string | null;
+    human_reviewed: boolean;
+    confidence: string | null;
+    ai_reviewed: boolean;
+  };
 
-  let applied = 0;
-  let linesCleared = 0;
+  const lineById = new Map<string, DbLine>();
+  const FETCH_CHUNK = 150;
+  const applyErrors: string[] = [];
+
+  for (let i = 0; i < accepted.length; i += FETCH_CHUNK) {
+    const ids = accepted.slice(i, i + FETCH_CHUNK).map((a) => a.line_id);
+    const { data, error } = await admin
+      .from("tagged_lines")
+      .select(
+        "id, speaker_label, flag_reason, human_reviewed, confidence, ai_reviewed"
+      )
+      .eq("book_id", bookId)
+      .in("id", ids);
+
+    if (error) {
+      applyErrors.push(error.message);
+      continue;
+    }
+    for (const row of (data ?? []) as DbLine[]) {
+      lineById.set(row.id, row);
+    }
+  }
+
   const respectHuman = options?.respectHumanReviewed !== false;
+  const pending: {
+    line_id: string;
+    payload: {
+      speaker_label: string;
+      speaker_character_id: string | null;
+      confidence: string;
+      flag_reason: string | null;
+      ai_reviewed: boolean;
+    };
+    change: AiReviewAppliedChange;
+    clearsFlag: boolean;
+  }[] = [];
 
   for (const item of accepted) {
-    const dbLine = dbLines?.find((l) => l.id === item.line_id);
+    const dbLine = lineById.get(item.line_id);
     if (!dbLine || (respectHuman && dbLine.human_reviewed)) continue;
 
     const char = findCharacterBySpeaker(item.speaker, (chars ?? []) as Character[]);
+    const speakerLabel = char?.canonical_name ?? item.speaker;
+    const confidence = normalizeAiConfidence(item.confidence);
     const hadFlag = !!dbLine.flag_reason;
     const clearFlag = shouldClearFlagAfterApply(
       item.speaker,
-      item.confidence,
+      confidence,
       hadFlag
     );
-    if (clearFlag) linesCleared++;
-
     const newFlagReason = flagReasonAfterApply(
       dbLine.speaker_label,
       item.speaker,
       dbLine.flag_reason,
-      item.confidence,
+      confidence,
       clearFlag
     );
 
-    await admin
-      .from("tagged_lines")
-      .update({
-        speaker_label: char?.canonical_name ?? item.speaker,
+    pending.push({
+      line_id: item.line_id,
+      payload: {
+        speaker_label: speakerLabel,
         speaker_character_id: char?.id ?? null,
-        confidence: item.confidence,
+        confidence,
         flag_reason: newFlagReason,
         ai_reviewed: true,
-      })
-      .eq("id", item.line_id);
-
-    applied++;
+      },
+      change: {
+        line_id: item.line_id,
+        speaker_label: speakerLabel,
+        speaker_character_id: char?.id ?? null,
+        confidence,
+        flag_reason: newFlagReason,
+      },
+      clearsFlag: clearFlag,
+    });
   }
 
-  const status = await updateBookStatus(admin, bookId);
-  return { applied, lines_cleared: linesCleared, status, snapshot_id: snapshotId };
+  let applied = 0;
+  let linesCleared = 0;
+  const changes: AiReviewAppliedChange[] = [];
+  const UPDATE_CHUNK = 25;
+
+  for (let i = 0; i < pending.length; i += UPDATE_CHUNK) {
+    const chunk = pending.slice(i, i + UPDATE_CHUNK);
+    const results = await Promise.all(
+      chunk.map(async (entry) => {
+        const { error } = await admin
+          .from("tagged_lines")
+          .update(entry.payload)
+          .eq("id", entry.line_id)
+          .eq("book_id", bookId);
+        return { entry, error };
+      })
+    );
+
+    for (const { entry, error } of results) {
+      if (error) {
+        applyErrors.push(`Line ${entry.line_id}: ${error.message}`);
+        continue;
+      }
+      applied++;
+      if (entry.clearsFlag) linesCleared++;
+      changes.push(entry.change);
+    }
+  }
+
+  if (applied === 0 && applyErrors.length > 0) {
+    throw new Error(applyErrors[0] ?? "Apply failed");
+  }
+
+  const status =
+    options?.updateBookStatus === false
+      ? undefined
+      : await updateBookStatus(admin, bookId);
+
+  return {
+    applied,
+    lines_cleared: linesCleared,
+    changes,
+    errors: applyErrors,
+    status,
+    snapshot_id: snapshotId,
+  };
 }
 
 /** Direct apply (legacy / upload flow) — skips preview step. */

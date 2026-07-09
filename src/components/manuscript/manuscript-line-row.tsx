@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef } from "react";
-import { Loader2, Play, Volume2 } from "lucide-react";
+import { GripVertical, Loader2, Play, Volume2 } from "lucide-react";
 import {
   getTextSelectionInElement,
   type TextSelectionPayload,
@@ -21,6 +21,8 @@ export function ManuscriptLineRow({
   line,
   characters,
   onCharacterCreated,
+  onCharacterDeleted,
+  onCharacterMerged,
   isSelected,
   isHighlighted,
   isSaving,
@@ -35,6 +37,13 @@ export function ManuscriptLineRow({
   onCastVoice,
   onTextSelected,
   selectionEnabled = false,
+  reorderEnabled = false,
+  isDragging = false,
+  isDragOver = false,
+  onReorderDragStart,
+  onReorderDragEnd,
+  onReorderDragOver,
+  onReorderDrop,
   isChapterStart = false,
   speechTagAfter,
 }: {
@@ -42,6 +51,8 @@ export function ManuscriptLineRow({
   line: ManuscriptLine;
   characters: Pick<Character, "id" | "canonical_name" | "aliases">[];
   onCharacterCreated?: (character: SpeakerCharacter) => void;
+  onCharacterDeleted?: (characterId: string) => void;
+  onCharacterMerged?: (sourceId: string, targetId: string) => void;
   isSelected: boolean;
   isHighlighted: boolean;
   isSaving: boolean;
@@ -59,6 +70,13 @@ export function ManuscriptLineRow({
   onPlay: (line: ManuscriptLine) => void;
   onCastVoice: (line: ManuscriptLine) => void;
   onTextSelected?: (payload: TextSelectionPayload) => void;
+  reorderEnabled?: boolean;
+  isDragging?: boolean;
+  isDragOver?: boolean;
+  onReorderDragStart?: (lineId: string) => void;
+  onReorderDragEnd?: () => void;
+  onReorderDragOver?: (lineId: string) => void;
+  onReorderDrop?: (lineId: string) => void;
   selectionEnabled?: boolean;
   isChapterStart?: boolean;
   /** Speech tag from Word source when not stored as its own line (e.g. "Nikki said."). */
@@ -75,8 +93,14 @@ export function ManuscriptLineRow({
 
   return (
     <div
-      className={`rounded-md px-3 py-2 transition-colors border-l-4 ${
-        isHighlighted
+      className={`relative rounded-md px-3 py-2 transition-colors border-l-4 ${
+        isDragOver
+          ? "ring-2 ring-burgundy/50 ring-inset"
+          : ""
+      } ${
+        isDragging
+          ? "opacity-40"
+          : isHighlighted
           ? "bg-teal/15 border-l-teal ring-1 ring-teal/30"
           : isSelected
             ? "bg-burgundy/10 border-l-burgundy"
@@ -86,12 +110,45 @@ export function ManuscriptLineRow({
                 ? "bg-warning/5 border-l-warning/60"
                 : "bg-warm-sand/25 border-l-transparent hover:bg-warm-sand/50"
       }`}
+      onDragOver={(e) => {
+        if (!reorderEnabled) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        onReorderDragOver?.(line.id);
+      }}
+      onDrop={(e) => {
+        if (!reorderEnabled) return;
+        e.preventDefault();
+        onReorderDrop?.(line.id);
+      }}
     >
+      {isDragOver && (
+        <div
+          className="absolute left-2 right-2 top-0 h-0.5 bg-burgundy rounded-full -translate-y-px pointer-events-none"
+          aria-hidden
+        />
+      )}
       <div
         className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-1.5"
         onClick={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.stopPropagation()}
       >
+        {reorderEnabled && (
+          <button
+            type="button"
+            draggable
+            className="h-6 w-5 flex items-center justify-center shrink-0 cursor-grab active:cursor-grabbing text-slate/50 hover:text-burgundy touch-none"
+            aria-label={`Drag to reorder line ${line.line_order}`}
+            onDragStart={(e) => {
+              e.dataTransfer.setData("text/plain", line.id);
+              e.dataTransfer.effectAllowed = "move";
+              onReorderDragStart?.(line.id);
+            }}
+            onDragEnd={() => onReorderDragEnd?.()}
+          >
+            <GripVertical className="h-4 w-4" />
+          </button>
+        )}
         <input
           type="checkbox"
           checked={isSelected}
@@ -120,6 +177,8 @@ export function ManuscriptLineRow({
           value={speakerValue}
           characters={characters as SpeakerCharacter[]}
           onCharacterCreated={onCharacterCreated}
+          onCharacterDeleted={onCharacterDeleted}
+          onCharacterMerged={onCharacterMerged}
           onTriggerClick={(e) => e.stopPropagation()}
           onValueChange={(value, character) =>
             onSpeakerChange(line, value, character)

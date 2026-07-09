@@ -4,6 +4,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api/auth";
 import { applyAiReviewProposals } from "@/lib/books/run-ai-review";
 
+export const maxDuration = 300;
+
 const bodySchema = z.object({
   items: z
     .array(
@@ -17,6 +19,7 @@ const bodySchema = z.object({
     .min(1),
   create_snapshot: z.boolean().optional(),
   respect_human_reviewed: z.boolean().optional(),
+  update_status: z.boolean().optional(),
 });
 
 export async function POST(
@@ -43,6 +46,7 @@ export async function POST(
       {
         createSnapshot: parsed.data.create_snapshot !== false,
         respectHumanReviewed: parsed.data.respect_human_reviewed !== false,
+        updateBookStatus: parsed.data.update_status !== false,
       }
     );
     return NextResponse.json(result);

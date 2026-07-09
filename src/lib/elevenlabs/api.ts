@@ -36,6 +36,8 @@ export type SynthesizeSpeechOptions = {
   language_code?: string | null;
   voice_settings?: VoiceSettings | null;
   model_id?: string;
+  /** ElevenLabs output format, e.g. "mp3_44100_128". Defaults to API default MP3. */
+  output_format?: string;
 };
 
 export function getElevenLabsApiKey(): string {
@@ -263,6 +265,16 @@ export async function createVoiceFromRemixPreview(options: {
   };
 }
 
+/** Error carrying the HTTP status so callers can back off on 429 / 5xx. */
+export class ElevenLabsRequestError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ElevenLabsRequestError";
+    this.status = status;
+  }
+}
+
 export async function synthesizeSpeech(
   voiceId: string,
   text: string,
@@ -281,8 +293,12 @@ export async function synthesizeSpeech(
     body.voice_settings = settings;
   }
 
+  const query = options.output_format
+    ? `?output_format=${encodeURIComponent(options.output_format)}`
+    : "";
+
   const res = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}${query}`,
     {
       method: "POST",
       headers: {
@@ -296,7 +312,11 @@ export async function synthesizeSpeech(
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(err || "Text-to-speech failed");
+    const status = res.status;
+    throw new ElevenLabsRequestError(
+      err || "Text-to-speech failed",
+      status
+    );
   }
 
   return res.arrayBuffer();

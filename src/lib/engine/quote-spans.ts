@@ -102,6 +102,14 @@ export function isSplitInsideQuote(text: string, start: number, end: number): bo
   return false;
 }
 
+/** True when text after [end) begins with quoted dialogue. */
+export function trailingTextStartsDialogue(text: string, end: number): boolean {
+  const trailing = text.slice(end).trimStart();
+  if (!trailing) return false;
+  const first = trailing[0] as QuoteChar;
+  return OPENERS.has(first);
+}
+
 export function isWrappedInQuotes(text: string): boolean {
   const t = text.trim();
   if (t.length < 2) return false;

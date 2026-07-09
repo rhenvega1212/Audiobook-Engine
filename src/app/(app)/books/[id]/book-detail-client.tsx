@@ -41,7 +41,10 @@ import { BookStatusBadge, CastStatusBadge } from "@/lib/books/status-badge";
 import { runBatchAiReviewPreview } from "@/lib/books/run-ai-review-client";
 import { AiReviewPreviewDialog } from "@/components/books/ai-review-preview-dialog";
 import type { SpeakerCharacter } from "@/components/books/speaker-select";
-import type { AiReviewProposal } from "@/lib/books/ai-review-proposals";
+import type {
+  AiReviewAppliedChange,
+  AiReviewProposal,
+} from "@/lib/books/ai-review-proposals";
 import type { AiReviewEligibilityStats } from "@/lib/books/ai-review-eligibility";
 import type { BookChapterRow } from "@/lib/books/book-chapters";
 import { VoicePickerDialog } from "@/components/voice-picker-dialog";
@@ -52,6 +55,9 @@ import { voiceAssignmentsFromCharacters } from "@/lib/elevenlabs/voice-picker-ut
 import { displayBookTitle } from "@/lib/books/display-title";
 import { saveBookCheckpoint } from "@/lib/books/save-checkpoint-client";
 import type { DetectedCharacter } from "@/lib/characters/match-status";
+import { useManuscriptUndo } from "@/lib/manuscript/use-manuscript-undo";
+import { UndoEditButton } from "@/components/manuscript/undo-edit-button";
+import { isEditableTarget } from "@/lib/manuscript/hotkeys";
 
 const ANALYSIS_STAGES = [
   { progress: 8, message: "Pouring through your manuscript…" },
@@ -93,6 +99,8 @@ export function BookDetailClient({
   bookChapters?: BookChapterRow[];
 }) {
   const router = useRouter();
+  const { undoCount, undoBusy, applyUndo, refreshUndoCount } =
+    useManuscriptUndo(bookId);
   const [pickerChar, setPickerChar] = useState<Character | null>(null);
   const [pickerSamples, setPickerSamples] = useState<string[]>([]);
   const [analyzing, setAnalyzing] = useState(book.status === "analyzing");
@@ -154,6 +162,26 @@ export function BookDetailClient({
       setAnalyzing(true);
     }
   }, [book.status]);
+
+  useEffect(() => {
+    void refreshUndoCount();
+  }, [refreshUndoCount]);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key.toLowerCase() === "z" &&
+        !e.shiftKey &&
+        !isEditableTarget(e.target)
+      ) {
+        e.preventDefault();
+        void applyUndo();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [applyUndo]);
 
   useEffect(() => {
     if (!aiReviewOpen) return;
@@ -327,7 +355,12 @@ export function BookDetailClient({
     }
   }
 
-  function handleAiApplied(applied: number) {
+  function handleAiApplied({
+    applied,
+  }: {
+    applied: number;
+    changes: AiReviewAppliedChange[];
+  }) {
     setAiUndoAvailable(true);
     toast.success(
       applied > 0
@@ -568,10 +601,13 @@ export function BookDetailClient({
         )}
         <div className="mt-4 flex flex-wrap gap-2">
           <Button asChild size="sm">
-            <Link href={`/books/${bookId}/cleanup`}>Manuscript cleanup</Link>
+            <Link href={`/books/${bookId}/cleanup`}>Manuscript editor</Link>
           </Button>
           <Button asChild variant="secondary" size="sm">
             <Link href={`/books/${bookId}/manuscript`}>Speaker studio</Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link href={`/books/${bookId}/downloads`}>Export</Link>
           </Button>
         </div>
         {lineCount > 0 && (
@@ -625,7 +661,16 @@ export function BookDetailClient({
 
       <div className="grid gap-8 lg:grid-cols-3">
         <div className="min-w-0 lg:col-span-2">
-          <h2 className="font-serif text-h2 mb-4">Detected characters</h2>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 className="font-serif text-h2">Detected characters</h2>
+            {undoCount > 0 && (
+              <UndoEditButton
+                undoCount={undoCount}
+                busy={undoBusy}
+                onUndo={() => void applyUndo()}
+              />
+            )}
+          </div>
           <Table scrollable className="table-fixed text-xs min-w-[36rem]">
             <TableHeader>
               <TableRow>
@@ -700,7 +745,10 @@ export function BookDetailClient({
                         roster={roster}
                         onCast={() => openPicker(d)}
                         onViewLines={() => setLinesCharacter(d.name)}
-                        onMerged={() => router.refresh()}
+                        onMerged={() => {
+                          router.refresh();
+                          void refreshUndoCount();
+                        }}
                       />
                     </div>
                   </TableCell>
@@ -722,7 +770,7 @@ export function BookDetailClient({
                 once at import.
               </p>
               <Button asChild className="w-full">
-                <Link href={`/books/${bookId}/cleanup`}>Cleanup (document view)</Link>
+                <Link href={`/books/${bookId}/cleanup`}>Manuscript editor (document view)</Link>
               </Button>
               <Button asChild variant="secondary" className="w-full">
                 <Link href={`/books/${bookId}/manuscript`}>Speaker studio</Link>
@@ -865,6 +913,23 @@ export function BookDetailClient({
                   Cast all book characters and clear flagged lines first.
                 </p>
               )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-h3">Produce audiobook</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-body-sm text-slate mb-4">
+                Render upload-ready MP3 files — one per chapter, plus credits —
+                mastered for KDP/Audible, Spotify, and similar.
+              </p>
+              <Button asChild variant="secondary" className="w-full">
+                <Link href={`/books/${bookId}/produce`}>
+                  Produce audiobook files
+                </Link>
+              </Button>
             </CardContent>
           </Card>
         </div>

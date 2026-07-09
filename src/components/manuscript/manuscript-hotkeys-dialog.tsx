@@ -126,6 +126,15 @@ export function ManuscriptHotkeysDialog({
           ))}
         </ul>
 
+        <p className="text-body-sm text-slate border-t border-border-muted pt-3">
+          <span className="font-medium text-ink">Undo last edit:</span>{" "}
+          {typeof navigator !== "undefined" &&
+          /Mac|iPhone|iPad/.test(navigator.platform)
+            ? "⌘Z"
+            : "Ctrl+Z"}{" "}
+          (up to 10 steps — speaker changes, splits, merges, deletes)
+        </p>
+
         {conflicts.length > 0 && (
           <div className="rounded-md bg-dark-red/10 px-3 py-2 text-body-sm text-dark-red">
             {conflicts.map((c) => (

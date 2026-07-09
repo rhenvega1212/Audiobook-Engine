@@ -79,6 +79,11 @@ export const lineSplitSchema = z.object({
   end: z.number().int().min(0),
   speaker_character_id: z.string().uuid().nullable(),
   speaker_label: z.string().min(1),
+  /** Prepend trailing quoted dialogue to the next line instead of creating a new row. */
+  merge_trailing_into_next: z.boolean().optional(),
+  /** When merging trailing dialogue, optionally reassign the next line's speaker. */
+  trailing_speaker_character_id: z.string().uuid().nullable().optional(),
+  trailing_speaker_label: z.string().min(1).optional(),
 });
 
 export const lineMergeSchema = z.object({
@@ -87,6 +92,11 @@ export const lineMergeSchema = z.object({
 
 export const lineDeleteSchema = z.object({
   line_ids: z.array(z.string().uuid()).min(1).max(500),
+});
+
+export const lineReorderSchema = z.object({
+  line_id: z.string().uuid(),
+  target_line_order: z.number().int().min(0),
 });
 
 export const pronunciationSchema = z.object({

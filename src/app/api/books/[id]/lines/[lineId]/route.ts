@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api/auth";
 import { lineUpdateSchema } from "@/lib/validations";
 import { updateBookStatus } from "@/lib/books/compute-book-status";
-import { ensureEditCheckpoint } from "@/lib/books/manuscript-snapshot";
+import { createUndoCheckpoint } from "@/lib/books/manuscript-snapshot";
 
 function isProtectedEdit(payload: Record<string, unknown>): boolean {
   return (
@@ -60,7 +60,7 @@ export async function POST(
 
   if (isProtectedEdit(updates)) {
     const admin = createAdminClient();
-    await ensureEditCheckpoint(admin, id);
+    await createUndoCheckpoint(admin, id, "Before line edit");
   }
 
   const { data, error: dbError } = await supabase

@@ -30,7 +30,7 @@ export function pageLabelFromPath(pathname: string): string {
     return "Speaker studio";
   }
   if (pathname.startsWith("/books/") && pathname.includes("/cleanup")) {
-    return "Manuscript cleanup";
+    return "Manuscript editor";
   }
   if (pathname.startsWith("/books/") && pathname.includes("/review")) {
     return "Review";

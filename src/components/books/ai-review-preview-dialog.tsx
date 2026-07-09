@@ -19,7 +19,11 @@ import {
   resolveSpeakerIdFromLine,
   type SpeakerCharacter,
 } from "@/components/books/speaker-select";
-import type { AiReviewProposal } from "@/lib/books/ai-review-proposals";
+import type {
+  AiReviewAppliedChange,
+  AiReviewProposal,
+} from "@/lib/books/ai-review-proposals";
+import { normalizeAiConfidence } from "@/lib/confidence";
 import { describeAiEligibility } from "@/lib/books/ai-review-eligibility";
 import type { AiReviewEligibilityStats } from "@/lib/books/ai-review-eligibility";
 
@@ -48,9 +52,14 @@ export function AiReviewPreviewDialog({
   characters: SpeakerCharacter[];
   onCharacterCreated?: (character: SpeakerCharacter) => void;
   onOpenChange: (open: boolean) => void;
-  onApplied: (applied: number) => void;
+  onApplied: (result: {
+    applied: number;
+    changes: AiReviewAppliedChange[];
+  }) => void;
 }) {
   const [submitting, setSubmitting] = useState(false);
+  const [applyProgress, setApplyProgress] = useState(0);
+  const [applyMessage, setApplyMessage] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [chosenSpeakers, setChosenSpeakers] = useState<Record<string, string>>(
     {}
@@ -126,40 +135,94 @@ export function AiReviewPreviewDialog({
 
   async function applySelected() {
     setSubmitting(true);
+    setApplyProgress(2);
+    setApplyMessage("Preparing to save…");
     try {
-      const items = proposals.map((p) => {
-        const chosen = chosenSpeakers[p.line_id] ?? p.new_speaker;
-        const overridden = chosen !== p.new_speaker;
-        return {
-          line_id: p.line_id,
-          speaker: chosen,
-          confidence: overridden ? "high" : p.confidence,
-          accept: selected.has(p.line_id),
-        };
-      });
+      const accepted = proposals
+        .filter((p) => selected.has(p.line_id))
+        .map((p) => {
+          const chosen = chosenSpeakers[p.line_id] ?? p.new_speaker;
+          const overridden = chosen !== p.new_speaker;
+          return {
+            line_id: p.line_id,
+            speaker: chosen,
+            confidence: normalizeAiConfidence(
+              overridden ? "high" : p.confidence
+            ),
+            accept: true,
+          };
+        });
 
-      const res = await fetch(`/api/books/${bookId}/ai-review/apply`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          items,
-          create_snapshot: true,
-          respect_human_reviewed: respectHumanReviewed,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error((data as { error?: string }).error ?? "Apply failed");
+      if (accepted.length === 0) return;
+
+      const BATCH = 80;
+      const totalBatches = Math.ceil(accepted.length / BATCH);
+      let totalApplied = 0;
+      const allChanges: AiReviewAppliedChange[] = [];
+
+      for (let i = 0; i < accepted.length; i += BATCH) {
+        const batch = accepted.slice(i, i + BATCH);
+        const batchNum = Math.floor(i / BATCH) + 1;
+        const savedSoFar = Math.min(i, accepted.length);
+
+        setApplyMessage(
+          totalBatches > 1
+            ? `Saving batch ${batchNum} of ${totalBatches} (${savedSoFar.toLocaleString()} of ${accepted.length.toLocaleString()} lines saved)…`
+            : `Saving ${accepted.length.toLocaleString()} line${accepted.length === 1 ? "" : "s"}…`
+        );
+        setApplyProgress(
+          totalBatches > 1
+            ? Math.min(97, Math.round((savedSoFar / accepted.length) * 100))
+            : 15
+        );
+
+        const res = await fetch(`/api/books/${bookId}/ai-review/apply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            items: batch,
+            create_snapshot: i === 0,
+            respect_human_reviewed: respectHumanReviewed,
+            update_status: i + BATCH >= accepted.length,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error((data as { error?: string }).error ?? "Apply failed");
+        }
+
+        totalApplied += (data as { applied?: number }).applied ?? 0;
+        allChanges.push(
+          ...((data as { changes?: AiReviewAppliedChange[] }).changes ?? [])
+        );
+
+        const done = Math.min(i + batch.length, accepted.length);
+        setApplyProgress(Math.min(99, Math.round((done / accepted.length) * 100)));
+        setApplyMessage(
+          `Saved ${done.toLocaleString()} of ${accepted.length.toLocaleString()} lines…`
+        );
       }
-      onApplied((data as { applied?: number }).applied ?? 0);
+
+      setApplyProgress(100);
+      setApplyMessage("Done");
+
+      onApplied({ applied: totalApplied, changes: allChanges });
       onOpenChange(false);
     } finally {
       setSubmitting(false);
+      setApplyProgress(0);
+      setApplyMessage("");
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (submitting) return;
+        onOpenChange(next);
+      }}
+    >
       <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>
@@ -176,6 +239,21 @@ export function AiReviewPreviewDialog({
                 : "No speaker changes — Claude confirmed current assignments."}
           </DialogDescription>
         </DialogHeader>
+
+        {submitting && (
+          <div className="space-y-2 rounded-md border border-burgundy/20 bg-burgundy/5 px-4 py-3">
+            <div className="flex items-center justify-between gap-2 text-body-sm">
+              <span className="text-burgundy font-medium truncate flex items-center gap-2">
+                <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                {applyMessage || "Saving changes…"}
+              </span>
+              <span className="text-slate tabular-nums shrink-0">
+                {applyProgress}%
+              </span>
+            </div>
+            <Progress value={applyProgress} active className="h-2.5" />
+          </div>
+        )}
 
         {loading && (
           <div className="space-y-2 rounded-md border border-burgundy/20 bg-burgundy/5 px-4 py-3">
@@ -357,7 +435,7 @@ export function AiReviewPreviewDialog({
         </div>
 
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" disabled={submitting} onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button
@@ -369,7 +447,9 @@ export function AiReviewPreviewDialog({
             }
           >
             {submitting
-              ? "Applying…"
+              ? applyProgress > 0
+                ? `Saving… ${applyProgress}%`
+                : "Applying…"
               : `Apply ${selected.size} change${selected.size === 1 ? "" : "s"}`}
           </Button>
         </div>

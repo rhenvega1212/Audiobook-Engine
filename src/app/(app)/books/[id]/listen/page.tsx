@@ -29,13 +29,19 @@ export default async function ListenPage({
 
   if (!book) notFound();
 
-  const [{ data: characters }, { data: dictionary }] = await Promise.all([
-    supabase.from("characters").select("*").eq("series_id", book.series_id),
-    supabase
-      .from("pronunciations")
-      .select("word, spoken_form")
-      .eq("series_id", book.series_id),
-  ]);
+  const [{ data: characters }, { data: dictionary }, { data: chapterRows }] =
+    await Promise.all([
+      supabase.from("characters").select("*").eq("series_id", book.series_id),
+      supabase
+        .from("pronunciations")
+        .select("word, spoken_form")
+        .eq("series_id", book.series_id),
+      supabase
+        .from("book_chapters")
+        .select("title, start_line_order")
+        .eq("book_id", id)
+        .order("start_line_order"),
+    ]);
 
   const roster = (characters ?? []) as Character[];
   const dict = dictionary ?? [];
@@ -86,12 +92,18 @@ export default async function ListenPage({
   const speakers = [...new Set(lines.map((l) => l.speaker_label))].sort();
   const castCount = lines.filter((l) => l.voice_id).length;
 
+  const chapters = ((chapterRows ?? []) as {
+    title: string;
+    start_line_order: number;
+  }[]).map((c) => ({ title: c.title, start_line_order: c.start_line_order }));
+
   return (
     <ListenClient
       bookId={id}
       bookTitle={displayBookTitle(book.title)}
       lines={lines}
       speakers={speakers}
+      chapters={chapters}
       castCount={castCount}
       totalCount={lines.length}
       excludedCount={excludedCount}

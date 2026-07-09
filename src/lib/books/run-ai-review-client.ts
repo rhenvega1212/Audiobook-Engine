@@ -38,6 +38,10 @@ export async function runBatchAiReviewPreview(
   const allErrors: string[] = [];
   let apiCalls = 0;
   let lastEligibility: AiReviewEligibilityStats | undefined;
+  // Total lines Claude has to review in this scope (stable across batches in
+  // preview mode). Once known, progress reflects lines reviewed / total instead
+  // of a fake per-batch creep.
+  let totalEligible = 0;
   let displayProgress = 3;
 
   onProgress?.({
@@ -49,6 +53,23 @@ export async function runBatchAiReviewPreview(
 
   while (hasMore && batch < 40) {
     batch++;
+
+    // Project where this batch should land so the creep stays local (one batch
+    // ahead) rather than racing to the top of the bar and stalling there.
+    const processedBefore = processedIndices.length;
+    const estPerBatch =
+      batch > 1 && processedBefore > 0 ? processedBefore / (batch - 1) : 12;
+    const ceiling =
+      totalEligible > 0
+        ? Math.min(
+            97,
+            Math.max(
+              displayProgress + 1,
+              ((processedBefore + estPerBatch) / totalEligible) * 100
+            )
+          )
+        : Math.min(90, displayProgress + 18);
+
     const stopTicker = startAiReviewProgressTicker(
       (progress, message) => {
         displayProgress = Math.max(displayProgress, progress);
@@ -61,7 +82,7 @@ export async function runBatchAiReviewPreview(
       },
       {
         floor: displayProgress,
-        ceiling: Math.min(94, displayProgress + 78),
+        ceiling,
         batch,
         mode: "preview",
       }
@@ -117,6 +138,9 @@ export async function runBatchAiReviewPreview(
     apiCalls += (data as { api_calls?: number }).api_calls ?? 0;
     lastEligibility = (data as { eligibility?: AiReviewEligibilityStats })
       .eligibility;
+    if (lastEligibility && lastEligibility.eligible_for_ai > 0) {
+      totalEligible = Math.max(totalEligible, lastEligibility.eligible_for_ai);
+    }
     hasMore = (data as { has_more?: boolean }).has_more ?? false;
     processedIndices =
       (data as { processed_indices?: number[] }).processed_indices ??
@@ -133,15 +157,23 @@ export async function runBatchAiReviewPreview(
       hasMore = false;
     }
 
-    const progress = hasMore
-      ? Math.min(95, 10 + batch * 8)
-      : 100;
+    const processedNow = processedIndices.length;
+    const realProgress =
+      totalEligible > 0
+        ? Math.round((processedNow / totalEligible) * 100)
+        : Math.min(95, 10 + batch * 8);
+    const progress = hasMore ? Math.min(97, realProgress) : 100;
 
     displayProgress = Math.max(displayProgress, progress);
 
+    const reviewedSuffix =
+      totalEligible > 0
+        ? `Reviewed ${Math.min(processedNow, totalEligible).toLocaleString()} of ${totalEligible.toLocaleString()} lines`
+        : `Batch ${batch}`;
+
     onProgress?.({
       message: hasMore
-        ? `Batch ${batch}: ${allProposals.length.toLocaleString()} suggestion${allProposals.length === 1 ? "" : "s"} so far…`
+        ? `${reviewedSuffix} · ${allProposals.length.toLocaleString()} suggestion${allProposals.length === 1 ? "" : "s"} so far…`
         : allProposals.length > 0
           ? `${allProposals.length.toLocaleString()} suggestions ready`
           : "No changes suggested",
@@ -216,7 +248,9 @@ export async function runBatchAiReview(
       },
       {
         floor: displayProgress,
-        ceiling: Math.min(94, displayProgress + 78),
+        // Advance at most one batch's worth per call so the bar keeps moving
+        // across batches instead of racing to the top and stalling.
+        ceiling: Math.min(96, displayProgress + 12),
         batch,
         mode: "apply",
       }

@@ -3,9 +3,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api/auth";
 import { updateBookStatus } from "@/lib/books/compute-book-status";
 import {
+  countUndoSnapshots,
   createManuscriptSnapshot,
   listManuscriptSnapshots,
   restoreManuscriptSnapshot,
+  undoLastManuscriptEdit,
 } from "@/lib/books/manuscript-snapshot";
 
 export async function GET(
@@ -17,11 +19,16 @@ export async function GET(
 
   const { id } = await params;
   const admin = createAdminClient();
-  const snapshots = await listManuscriptSnapshots(admin, id);
+  const [snapshots, undo_count] = await Promise.all([
+    listManuscriptSnapshots(admin, id),
+    countUndoSnapshots(admin, id),
+  ]);
 
   return NextResponse.json({
     snapshots,
     can_restore: snapshots.length > 0,
+    undo_count,
+    can_undo: undo_count > 0,
   });
 }
 
@@ -40,6 +47,26 @@ export async function POST(
     body = await request.json();
   } catch {
     // empty body defaults to create
+  }
+
+  if (body.action === "undo") {
+    try {
+      const { restored, inserted, deleted, snapshot, undo_remaining } =
+        await undoLastManuscriptEdit(admin, id);
+      const status = await updateBookStatus(admin, id);
+      return NextResponse.json({
+        restored,
+        inserted,
+        deleted,
+        snapshot,
+        undo_remaining,
+        status,
+        undone: true,
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Undo failed";
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
   }
 
   if (body.action === "restore") {

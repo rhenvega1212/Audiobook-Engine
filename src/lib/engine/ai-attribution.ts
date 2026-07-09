@@ -1,9 +1,13 @@
 import type { EngineCharacter, TaggedLine } from "./types";
 import { CHAPTER_HEADING_RE } from "./regex";
+import { formatAttributionExamplesForPrompt } from "./attribution-examples";
 import type { AiReviewProposal } from "@/lib/books/ai-review-proposals";
+import { normalizeAiConfidence } from "@/lib/confidence";
 import {
   lineNeedsAiPass,
   shouldProposeSpeakerChange,
+  isWeakAttributionFlag,
+  lineLooksLikeQuotedDialogue,
   type AiPassOptions,
   type TaggedLineForAi,
 } from "./ai-line-eligibility";
@@ -11,6 +15,8 @@ import {
 export type { AiPassOptions, TaggedLineForAi } from "./ai-line-eligibility";
 export {
   isSettledAiAssignment,
+  isWeakAttributionFlag,
+  lineLooksLikeQuotedDialogue,
   lineNeedsAiPass,
   shouldProposeSpeakerChange,
 } from "./ai-line-eligibility";
@@ -118,37 +124,46 @@ ${parts.join("\n\n")}
   for (let i = 0; i < sceneLines.length; i++) {
     const { line, paragraph_num } = sceneLines[i]!;
     const flagged = flaggedIndices.includes(i);
+    const weakFlag = isWeakAttributionFlag(line.flag_reason);
     const marker = flagged
       ? line.ai_reviewed
-        ? "  ⚠ RE-CHECK — keep current speaker unless source clearly contradicts"
+        ? weakFlag || line.speaker === "Narrator"
+          ? "  ⚠ RE-CHECK — prior assignment is likely wrong"
+          : "  ⚠ RE-CHECK — change only if source clearly contradicts current speaker"
         : "  ⚠ NEEDS REVIEW"
       : "";
     const hasSource = !!sourceParagraphs?.[paragraph_num]?.trim();
-    const textNote = hasSource
-      ? `(paragraph ${paragraph_num} — see source above)`
-      : line.line;
-    sceneText += `[${i}] [${line.speaker}] ${textNote}${marker}\n`;
+    const linePreview =
+      line.line.length > 220 ? `${line.line.slice(0, 217)}…` : line.line;
+    const sourceHint = hasSource ? ` (paragraph ${paragraph_num} in source)` : "";
+    sceneText += `[${i}] [${line.speaker}] "${linePreview}"${sourceHint}${marker}\n`;
   }
+
+  const examplesBlock = formatAttributionExamplesForPrompt();
 
   return `You are an expert at attributing dialogue to characters in a novel.
 
 CHARACTER ROSTER:
 ${rosterText}
 
-${sourceBlock}CURRENT LINE ATTRIBUTIONS (existing assignments — treat character speakers as strong priors):
+${examplesBlock}
+
+${sourceBlock}CURRENT LINE ATTRIBUTIONS (each line shows its stored text — splits may differ from source paragraphs):
 ${sceneText}
 
-Lines marked "⚠ NEEDS REVIEW" need a first-pass speaker. Lines marked "⚠ RE-CHECK" were reviewed before — only change them if the SOURCE MANUSCRIPT clearly contradicts the current speaker. Use the source for quote boundaries and conversational flow.
+Lines marked "⚠ NEEDS REVIEW" need a first-pass speaker. Lines marked "⚠ RE-CHECK" had a weak or likely-wrong assignment — fix them when conversation flow or the source supports a change.
 
 Important rules:
-- "Narrator" is correct for non-dialogue (descriptive prose, action beats)
-- Quoted speech must be assigned to a character, not Narrator — never change a character line to Narrator when quotes appear in the source
-- If the current speaker matches quoted dialogue in the source, return that same speaker with high confidence
+- "Narrator" is only for non-dialogue (description, action). Any line that is clearly quoted speech belongs to a character, even if it lacks quote marks in storage
+- A character NAME inside dialogue does NOT mean that character is speaking (e.g. Nikki saying "about Isabel" → speaker is Nikki, not Isabel)
+- A character mentioned in the NEXT line or nearby narration is NOT automatically the speaker of this line
+- In two-person dialogue, speakers usually alternate — a line is often a direct response to the previous speaker
+- Continuation lines (same utterance split across rows) keep the same speaker as the previous dialogue line
+- When a new character enters and speaks, assign them — do not keep the previous scene's speaker
+- Quoted speech must be assigned to a character, not Narrator
 - Use exact canonical names from the roster (e.g. "Nikki Sands" not "Nikki")
 - If you cannot determine the speaker with confidence, return "UNKNOWN"
-- Consider conversation flow: in a 2-person dialogue, speakers usually alternate
-- Watch for scene transitions where new characters arrive
-- Prefer "low" confidence over guessing when attribution is ambiguous — do not clear uncertainty with a wild guess
+- Prefer "low" confidence over guessing when attribution is ambiguous
 
 Respond with ONLY valid JSON, no markdown or explanation:
 {
@@ -304,8 +319,9 @@ export async function runAiAssistedPass(
 
         const oldSpeaker = taggedLines[globalIdx]!.speaker;
         const newSpeaker = attr.speaker;
-        const confidence =
-          (attr.confidence as TaggedLine["confidence"]) ?? "medium";
+        const confidence = normalizeAiConfidence(
+          (attr.confidence as string) ?? "medium"
+        );
         const line = taggedLines[globalIdx]!;
 
         if (!shouldProposeSpeakerChange(line, oldSpeaker, newSpeaker, options)) {

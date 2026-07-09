@@ -2,7 +2,16 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Loader2, Plus, Search } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  GitMerge,
+  Loader2,
+  Plus,
+  Search,
+  Trash2,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +43,8 @@ export function SpeakerSelect({
   onValueChange,
   characters,
   onCharacterCreated,
+  onCharacterDeleted,
+  onCharacterMerged,
   disabled = false,
   className,
   placeholder = "Select speaker",
@@ -47,6 +58,10 @@ export function SpeakerSelect({
   onValueChange: (characterId: string, character?: SpeakerCharacter) => void;
   characters: SpeakerCharacter[];
   onCharacterCreated?: (character: SpeakerCharacter) => void;
+  /** When provided, each character can be deleted from the dropdown. */
+  onCharacterDeleted?: (characterId: string) => void;
+  /** When provided, a character can be merged into another from the dropdown. */
+  onCharacterMerged?: (sourceId: string, targetId: string) => void;
   disabled?: boolean;
   className?: string;
   placeholder?: string;
@@ -59,6 +74,10 @@ export function SpeakerSelect({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [mergeSourceId, setMergeSourceId] = useState<string | null>(null);
+  const [merging, setMerging] = useState(false);
   const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
   const rootRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -148,6 +167,8 @@ export function SpeakerSelect({
       }
       setOpen(false);
       setSearch("");
+      setConfirmDeleteId(null);
+      setMergeSourceId(null);
     }
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
@@ -157,6 +178,75 @@ export function SpeakerSelect({
     onValueChange(id, char);
     setOpen(false);
     setSearch("");
+    setConfirmDeleteId(null);
+    setMergeSourceId(null);
+  }
+
+  async function mergeCharacter(sourceId: string, targetId: string) {
+    setMerging(true);
+    try {
+      const res = await fetch(`/api/characters/${sourceId}/merge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_id: targetId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error ?? "Could not merge characters"
+        );
+      }
+      const info = data as {
+        source_name?: string;
+        target_name?: string;
+        reassigned_lines?: number;
+      };
+      onCharacterMerged?.(sourceId, targetId);
+      const n = info.reassigned_lines ?? 0;
+      toast.success(
+        `Merged “${info.source_name}” into “${info.target_name}”${
+          n > 0
+            ? ` · ${n.toLocaleString()} line${n === 1 ? "" : "s"} updated`
+            : ""
+        }`
+      );
+      setMergeSourceId(null);
+      setOpen(false);
+      setSearch("");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not merge characters");
+    } finally {
+      setMerging(false);
+    }
+  }
+
+  async function deleteCharacter(id: string) {
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/characters/${id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error ?? "Could not delete character"
+        );
+      }
+      const reassigned = (data as { reassigned_lines?: number }).reassigned_lines ?? 0;
+      onCharacterDeleted?.(id);
+      toast.success(
+        reassigned > 0
+          ? `Deleted character · ${reassigned.toLocaleString()} line${
+              reassigned === 1 ? "" : "s"
+            } reset to UNKNOWN`
+          : "Character deleted"
+      );
+      setConfirmDeleteId(null);
+      setOpen(false);
+      setSearch("");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not delete character");
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   async function addCharacter() {
@@ -225,8 +315,33 @@ export function SpeakerSelect({
         </div>
       </div>
 
+      {mergeSourceId && (
+        <div className="flex items-center justify-between gap-2 border-b border-border-muted bg-warm-sand/60 px-3 py-2 text-xs">
+          <span className="min-w-0 truncate">
+            Merge{" "}
+            <span className="font-medium">
+              &ldquo;
+              {characters.find((c) => c.id === mergeSourceId)?.canonical_name}
+              &rdquo;
+            </span>{" "}
+            into… pick a character
+            {merging && <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />}
+          </span>
+          <button
+            type="button"
+            className="shrink-0 text-slate hover:text-ink"
+            onClick={(e) => {
+              e.stopPropagation();
+              setMergeSourceId(null);
+            }}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       <ul className="max-h-56 overflow-y-auto py-1">
-        {showNarrator && (
+        {showNarrator && !mergeSourceId && (
           <li>
             <button
               type="button"
@@ -246,27 +361,106 @@ export function SpeakerSelect({
           </li>
         )}
 
-        {filtered.map((c) => (
-          <li key={c.id}>
+        {filtered.map((c) => {
+          const isMergeSource = mergeSourceId === c.id;
+          const inMergeMode = mergeSourceId !== null;
+          return (
+          <li key={c.id} className="group flex items-center">
             <button
               type="button"
+              disabled={isMergeSource || merging}
               className={cn(
-                "flex w-full items-center gap-2 px-3 py-2 text-sm text-left hover:bg-warm-sand",
-                value === c.id && "bg-warm-sand"
+                "flex flex-1 min-w-0 items-center gap-2 px-3 py-2 text-sm text-left hover:bg-warm-sand disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent",
+                value === c.id && !inMergeMode && "bg-warm-sand"
               )}
-              onClick={() => pick(c.id, c)}
+              onClick={() => {
+                if (inMergeMode) {
+                  if (!isMergeSource) void mergeCharacter(mergeSourceId, c.id);
+                  return;
+                }
+                pick(c.id, c);
+              }}
             >
-              {value === c.id && (
+              {value === c.id && !inMergeMode && (
                 <Check className="h-3.5 w-3.5 text-teal shrink-0" />
               )}
-              <span className={cn("truncate", value === c.id ? "" : "pl-5")}>
+              <span
+                className={cn(
+                  "truncate",
+                  value === c.id && !inMergeMode ? "" : "pl-5"
+                )}
+              >
                 {c.canonical_name}
               </span>
+              {isMergeSource && (
+                <span className="ml-auto text-[11px] text-slate">merging…</span>
+              )}
             </button>
+            {!inMergeMode && onCharacterMerged && (
+              <button
+                type="button"
+                title="Merge into another character"
+                aria-label={`Merge ${c.canonical_name} into another character`}
+                className="shrink-0 px-1.5 py-2 text-slate opacity-0 transition-opacity hover:text-teal focus:opacity-100 group-hover:opacity-100"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmDeleteId(null);
+                  setMergeSourceId(c.id);
+                  setSearch("");
+                }}
+              >
+                <GitMerge className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {!inMergeMode &&
+              onCharacterDeleted &&
+              (confirmDeleteId === c.id ? (
+                <span className="flex shrink-0 items-center gap-1.5 pr-2">
+                  <button
+                    type="button"
+                    className="text-[11px] font-medium text-danger hover:underline disabled:opacity-50"
+                    disabled={deletingId === c.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void deleteCharacter(c.id);
+                    }}
+                  >
+                    {deletingId === c.id ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      "Delete"
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className="text-[11px] text-slate hover:underline"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setConfirmDeleteId(null);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  title="Delete character"
+                  aria-label={`Delete ${c.canonical_name}`}
+                  className="shrink-0 px-2 py-2 text-slate opacity-0 transition-opacity hover:text-danger focus:opacity-100 group-hover:opacity-100"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirmDeleteId(c.id);
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              ))}
           </li>
-        ))}
+          );
+        })}
 
-        {showUnknown && (
+        {showUnknown && !mergeSourceId && (
           <li>
             <button
               type="button"
@@ -295,7 +489,7 @@ export function SpeakerSelect({
         )}
       </ul>
 
-      {search.trim() && !exactMatch && (
+      {search.trim() && !exactMatch && !mergeSourceId && (
         <div className="border-t border-border-muted p-2">
           <Button
             type="button"

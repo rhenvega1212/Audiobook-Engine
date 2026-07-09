@@ -18,6 +18,8 @@ export function ManuscriptCompactBlockRow({
   block,
   characters,
   onCharacterCreated,
+  onCharacterDeleted,
+  onCharacterMerged,
   isSelected,
   isHighlighted,
   isSaving,
@@ -34,6 +36,8 @@ export function ManuscriptCompactBlockRow({
   block: SpeakerBlock<ManuscriptLine>;
   characters: Pick<Character, "id" | "canonical_name" | "aliases">[];
   onCharacterCreated?: (character: SpeakerCharacter) => void;
+  onCharacterDeleted?: (characterId: string) => void;
+  onCharacterMerged?: (sourceId: string, targetId: string) => void;
   isSelected: boolean;
   isHighlighted: boolean;
   isSaving: boolean;
@@ -98,6 +102,8 @@ export function ManuscriptCompactBlockRow({
               value={speakerValue}
               characters={characters as SpeakerCharacter[]}
               onCharacterCreated={onCharacterCreated}
+              onCharacterDeleted={onCharacterDeleted}
+              onCharacterMerged={onCharacterMerged}
               onTriggerClick={(e) => e.stopPropagation()}
               onValueChange={(value, character) =>
                 onSpeakerChange(block, value, character)

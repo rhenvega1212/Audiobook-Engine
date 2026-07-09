@@ -1,10 +1,6 @@
 import type { EngineCharacter, ProcessResult, TaggedLine } from "./types";
 import { NAME_RE, DIALOGUE_TAG_START_RE, CHAPTER_HEADING_RE, CHAPTER_NUMBER_RE } from "./regex";
-import {
-  DIALOGUE_VERBS,
-  ACTION_TAG_VERBS,
-  PRONOUN_GENDER,
-} from "./vocabulary";
+import { DIALOGUE_VERBS, ACTION_TAG_VERBS, PRONOUN_GENDER, DIALOGUE_VERBS_PATTERN } from "./vocabulary";
 import { flagReasonForLine, type FlagContext } from "./flag-policy";
 import { resolveFirstNameToCanonical } from "./resolve-first-name";
 import { segmentParagraphByQuotes, type TextSegment } from "./quote-spans";
@@ -42,6 +38,23 @@ export function isDialogueTagOnly(text: string): boolean {
   return stripDialogueTag(raw).trim() === "";
 }
 
+function stripQuotedSpansForAttribution(text: string): string {
+  return text
+    .replace(/["'\u201C][^"'\u201D]*["'\u201D]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function nameAppearsWithDialogueVerb(text: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(
+    `\\b${escaped}\\b\\s+(?:\\w+\\s+){0,3}(?:${DIALOGUE_VERBS_PATTERN})\\b|` +
+      `\\b(?:${DIALOGUE_VERBS_PATTERN})\\b\\s*[,]?\\s*\\b${escaped}\\b`,
+    "i"
+  );
+  return pattern.test(text);
+}
+
 function extractSpeakerFromAttribution(
   attributionText: string,
   roster: EngineCharacter[],
@@ -55,15 +68,25 @@ function extractSpeakerFromAttribution(
   const hasActionVerb = words.some((w) => ACTION_TAG_VERBS.has(w));
   const hasVerb = hasDialogueVerb || hasActionVerb;
 
-  const nameCandidates = [...attributionText.matchAll(NAME_RE)].map((m) => m[1]!);
+  const attributionForNames = stripQuotedSpansForAttribution(attributionText);
+  const nameCandidates = [
+    ...attributionForNames.matchAll(NAME_RE),
+  ].map((m) => m[1]!);
+
   for (const candidate of nameCandidates) {
     const char = findCharacter(candidate, roster);
     if (char) {
-      return [char.canonical_name, hasVerb ? "high" : "medium", false];
+      if (!hasVerb || !nameAppearsWithDialogueVerb(attributionForNames, candidate)) {
+        continue;
+      }
+      return [char.canonical_name, "high", false];
     }
     const byFirst = resolveFirstNameToCanonical(candidate, roster);
     if (byFirst) {
-      return [byFirst.canonical_name, hasVerb ? "medium" : "medium", true];
+      if (!hasVerb || !nameAppearsWithDialogueVerb(attributionForNames, candidate)) {
+        continue;
+      }
+      return [byFirst.canonical_name, "medium", true];
     }
   }
 
@@ -273,6 +296,59 @@ function splitParagraphIntoLines(
 const SCENE_BREAK_RE =
   /^(\*{3,}|-{3,}|#{1,3}\s|(?:scene|Scene)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b)/;
 
+const NARRATOR = "Narrator";
+
+/**
+ * Cap on the length of a coalesced narrator line. Consecutive narrator rows are
+ * merged into one clip for smoother TTS cadence, but a single ElevenLabs request
+ * has an upper bound (~2500 chars), so we stop merging before we risk producing
+ * a request the TTS provider will reject. Pronunciation overrides can expand the
+ * spoken text, so we leave headroom.
+ */
+const MAX_MERGED_NARRATOR_CHARS = 2000;
+
+/**
+ * Merge runs of consecutive Narrator lines into a single line so text-to-speech
+ * renders them as one continuous clip. Back-to-back narrator rows otherwise each
+ * become an independent TTS generation with its own intonation and a hard seam
+ * between clips, which is the "choppy cadence" heard on playback.
+ *
+ * Rules:
+ * - Only adjacent lines both labeled "Narrator" are merged.
+ * - Chapter/scene headings (`block_boundary`) are never merged and break a run.
+ * - Pieces from the same source paragraph join with a space; pieces from
+ *   different paragraphs join with a blank line so the narrator still pauses
+ *   between paragraphs.
+ * - Merging stops before `MAX_MERGED_NARRATOR_CHARS` to stay within TTS limits.
+ */
+function coalesceNarratorRuns(lines: TaggedLine[]): TaggedLine[] {
+  const out: TaggedLine[] = [];
+
+  for (const line of lines) {
+    const prev = out[out.length - 1];
+    const canMerge =
+      prev !== undefined &&
+      prev.speaker === NARRATOR &&
+      line.speaker === NARRATOR &&
+      !prev.block_boundary &&
+      !line.block_boundary;
+
+    if (canMerge) {
+      const separator = line.paragraph_num !== prev!.paragraph_num ? "\n\n" : " ";
+      const combined = `${prev!.line.trim()}${separator}${line.line.trim()}`;
+      if (combined.length <= MAX_MERGED_NARRATOR_CHARS) {
+        prev!.line = combined;
+        prev!.flag_reason = prev!.flag_reason ?? line.flag_reason;
+        continue;
+      }
+    }
+
+    out.push({ ...line });
+  }
+
+  return out;
+}
+
 export function processManuscriptFromParagraphs(
   paragraphs: string[],
   roster: EngineCharacter[]
@@ -297,6 +373,7 @@ export function processManuscriptFromParagraphs(
         paragraph_num: i,
         confidence: "high",
         flag_reason: null,
+        block_boundary: true,
       });
       conversationParticipants = [];
       lastNamedSpeakers = {};
@@ -343,12 +420,14 @@ export function processManuscriptFromParagraphs(
     allLines.push(...lines);
   }
 
+  const lines = coalesceNarratorRuns(allLines);
+
   return {
-    lines: allLines,
+    lines,
     unknown_speakers: [...detectedUnknownSpeakers].sort(),
     total_paragraphs: paragraphs.length,
-    total_lines: allLines.length,
-    flagged_count: allLines.filter((l) => l.flag_reason).length,
+    total_lines: lines.length,
+    flagged_count: lines.filter((l) => l.flag_reason).length,
   };
 }
 

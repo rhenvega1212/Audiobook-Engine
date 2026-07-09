@@ -28,6 +28,31 @@ export function isSettledAiAssignment(line: TaggedLineForAi): boolean {
   );
 }
 
+/** True when automation used weak inference — eligible for AI re-check. */
+export function isWeakAttributionFlag(flagReason: string | null | undefined): boolean {
+  if (!flagReason) return false;
+  const f = flagReason.toLowerCase();
+  return (
+    f.includes("pronoun_only") ||
+    f.includes("back_and_forth") ||
+    f.includes("first_name_resolved") ||
+    f.includes("name_without_dialogue") ||
+    f.includes("inferred_from_context") ||
+    f.includes("unattributed_back_and_forth") ||
+    f.includes("unattributed_dialogue_inferred")
+  );
+}
+
+/** Dialogue-shaped text wrongly stored without a character speaker. */
+export function lineLooksLikeQuotedDialogue(line: TaggedLineForAi): boolean {
+  const t = line.line.trim();
+  if (!t) return false;
+  if (/^["'\u201C\u201D\u2018\u2019]/.test(t)) return true;
+  if (/["'\u201C\u201D\u2018\u2019]$/.test(t)) return true;
+  if (/^["'\u201C]/.test(t) && !/["'\u201D]$/.test(t)) return true;
+  return false;
+}
+
 /** Reject speaker flips that undo a good prior assignment (defense in depth). */
 export function shouldProposeSpeakerChange(
   line: TaggedLineForAi,
@@ -50,6 +75,8 @@ export function shouldProposeSpeakerChange(
     return true;
   }
   if (isSettledAiAssignment(line)) return false;
+  if (isWeakAttributionFlag(line.flag_reason)) return true;
+  if (line.ai_reviewed && lineLooksLikeQuotedDialogue(line)) return true;
   if (line.confidence === "high" && !line.flag_reason) return false;
   const text = line.line.trim();
   if (/["'\u201C\u201D\u2018\u2019]/.test(text)) return false;
@@ -75,13 +102,28 @@ export function lineNeedsAiPass(
   }
 
   if (isSettledAiAssignment(line)) return false;
+
+  if (
+    line.speaker === "Narrator" &&
+    lineLooksLikeQuotedDialogue(line) &&
+    !line.human_reviewed
+  ) {
+    return true;
+  }
+
   if (options?.includeAiReviewed && line.ai_reviewed) {
     return (
       !!line.flag_reason ||
       line.speaker === "UNKNOWN" ||
-      line.confidence !== "high"
+      line.confidence !== "high" ||
+      isWeakAttributionFlag(line.flag_reason)
     );
   }
+
+  if (line.ai_reviewed && isWeakAttributionFlag(line.flag_reason)) {
+    return true;
+  }
+
   if (
     !line.ai_reviewed &&
     line.confidence !== "high" &&

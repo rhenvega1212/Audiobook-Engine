@@ -9,7 +9,7 @@ import {
   useTransition,
 } from "react";
 import Link from "next/link";
-import { Loader2 } from "lucide-react";
+import { ChevronDown, Loader2, SlidersHorizontal } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -39,10 +39,12 @@ import { useLineAudioPlayer } from "@/components/audio/line-player";
 import { findCharacterBySpeaker } from "@/lib/characters/resolve-character";
 import { voicePlaybackFromCharacter } from "@/lib/elevenlabs/voice-cast";
 import { LineSelectionToolbar } from "@/components/manuscript/line-selection-toolbar";
+import { UndoEditButton } from "@/components/manuscript/undo-edit-button";
+import { useManuscriptUndo } from "@/lib/manuscript/use-manuscript-undo";
 import { ManuscriptSelectionToolbar } from "@/components/manuscript/manuscript-selection-toolbar";
 import { ManuscriptHotkeysDialog } from "@/components/manuscript/manuscript-hotkeys-dialog";
 import type { TextSelectionPayload } from "@/lib/manuscript/text-selection";
-import { isSplitInsideQuote } from "@/lib/engine/quote-spans";
+import { isSplitInsideQuote, trailingTextStartsDialogue } from "@/lib/engine/quote-spans";
 import {
   findCommandForEvent,
   isEditableTarget,
@@ -83,8 +85,68 @@ import {
 import { AiReviewPreviewDialog } from "@/components/books/ai-review-preview-dialog";
 import { runBatchAiReviewPreview } from "@/lib/books/run-ai-review-client";
 import type { AiReviewProposal } from "@/lib/books/ai-review-proposals";
+import type { AiReviewAppliedChange } from "@/lib/books/ai-review-proposals";
 import type { AiReviewEligibilityStats } from "@/lib/books/ai-review-eligibility";
 import type { AiReviewScope } from "@/lib/books/ai-review-scope";
+import {
+  reorderManuscriptLines,
+  targetLineOrderForDrop,
+} from "@/lib/manuscript/reorder-lines";
+import {
+  fetchWithTimeout,
+  operationErrorMessage,
+} from "@/lib/api/fetch-with-timeout";
+import type { SplitLineRow } from "@/lib/books/line-operations";
+
+function splitRowToManuscriptLine(
+  row: SplitLineRow,
+  roster: Character[]
+): ManuscriptLine {
+  const char =
+    roster.find((c) => c.id === row.speaker_character_id) ??
+    findCharacterBySpeaker(row.speaker_label, roster);
+  return {
+    id: row.id,
+    line_order: row.line_order,
+    paragraph_num: row.paragraph_num,
+    speaker_label: row.speaker_label,
+    speaker_character_id: row.speaker_character_id,
+    line_text: row.line_text,
+    flag_reason: row.flag_reason,
+    human_reviewed: row.human_reviewed ?? true,
+    excluded_from_export: row.excluded_from_export ?? false,
+    voice_id: char?.elevenlabs_voice_id ?? null,
+    voice_name: char?.elevenlabs_voice_name ?? null,
+    voice_playback: voicePlaybackFromCharacter(char),
+  };
+}
+
+function mergeSplitIntoLines(
+  prev: ManuscriptLine[],
+  returned: SplitLineRow[],
+  roster: Character[],
+  splitAtOrder: number,
+  insertedCount: number
+): ManuscriptLine[] {
+  const mappedById = new Map(
+    returned.map((row) => [row.id, splitRowToManuscriptLine(row, roster)])
+  );
+
+  const merged = prev.map((line) => {
+    if (mappedById.has(line.id)) return mappedById.get(line.id)!;
+    if (insertedCount > 0 && line.line_order > splitAtOrder) {
+      return { ...line, line_order: line.line_order + insertedCount };
+    }
+    return line;
+  });
+
+  const existing = new Set(merged.map((l) => l.id));
+  for (const line of mappedById.values()) {
+    if (!existing.has(line.id)) merged.push(line);
+  }
+
+  return merged.sort((a, b) => a.line_order - b.line_order);
+}
 
 function areSelectedLinesAdjacent(
   allLines: ManuscriptLine[],
@@ -113,6 +175,7 @@ export function ManuscriptStudioClient({
   initialBookChapters = [],
   speechTagsByLineId = {},
   initialMissingSpeechTagCount = 0,
+  initialUndoCount = 0,
 }: {
   bookId: string;
   bookTitle: string;
@@ -125,12 +188,40 @@ export function ManuscriptStudioClient({
   initialBookChapters?: BookChapterRow[];
   speechTagsByLineId?: Record<string, string>;
   initialMissingSpeechTagCount?: number;
+  initialUndoCount?: number;
 }) {
   const router = useRouter();
+  const { undoCount, undoBusy, applyUndo, refreshUndoCount } = useManuscriptUndo(
+    bookId,
+    initialUndoCount
+  );
   const [, startTransition] = useTransition();
   const { playingId, loadingId, playLine } = useLineAudioPlayer();
   const [lines, setLines] = useState(initialLines);
   const [rosterCharacters, setRosterCharacters] = useState(characters);
+  const [controlsOpen, setControlsOpen] = useState(true);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("ms-controls-open") === "0") {
+        setControlsOpen(false);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  function toggleControls() {
+    setControlsOpen((open) => {
+      const next = !open;
+      try {
+        localStorage.setItem("ms-controls-open", next ? "1" : "0");
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }
 
   useEffect(() => {
     setLines(initialLines);
@@ -172,6 +263,55 @@ export function ManuscriptStudioClient({
     },
     [characters, router]
   );
+
+  const handleCharacterDeleted = useCallback(
+    (characterId: string) => {
+      setRosterCharacters((prev) => prev.filter((c) => c.id !== characterId));
+      // Any lines that pointed at the deleted character are reset to UNKNOWN
+      // server-side; mirror that locally so the list updates immediately.
+      setLines((prev) =>
+        prev.map((l) =>
+          l.speaker_character_id === characterId
+            ? {
+                ...l,
+                speaker_character_id: null,
+                speaker_label: "UNKNOWN",
+                voice_id: null,
+                voice_name: null,
+                voice_playback: null,
+              }
+            : l
+        )
+      );
+      router.refresh();
+    },
+    [router]
+  );
+
+  const handleCharacterMerged = useCallback(
+    (sourceId: string, targetId: string) => {
+      const target = rosterCharacters.find((c) => c.id === targetId);
+      // Re-point local lines from the merged-away character onto the target.
+      setLines((prev) =>
+        prev.map((l) =>
+          l.speaker_character_id === sourceId
+            ? {
+                ...l,
+                speaker_character_id: targetId,
+                speaker_label: target?.canonical_name ?? l.speaker_label,
+                voice_id: target?.elevenlabs_voice_id ?? null,
+                voice_name: target?.elevenlabs_voice_name ?? null,
+                voice_playback: voicePlaybackFromCharacter(target),
+              }
+            : l
+        )
+      );
+      setRosterCharacters((prev) => prev.filter((c) => c.id !== sourceId));
+      router.refresh();
+    },
+    [rosterCharacters, router]
+  );
+
   const [search, setSearch] = useState("");
   const [speakerFilter, setSpeakerFilter] = useState(
     initialSpeaker && initialLines.some((l) => l.speaker_label === initialSpeaker)
@@ -205,6 +345,14 @@ export function ManuscriptStudioClient({
     SpeakerCharacter | undefined
   >();
   const [splitBusy, setSplitBusy] = useState(false);
+  const [reorderBusy, setReorderBusy] = useState(false);
+  const [draggingLineId, setDraggingLineId] = useState<string | null>(null);
+  const [dragOverLineId, setDragOverLineId] = useState<string | null>(null);
+  const [mergeTrailingIntoNext, setMergeTrailingIntoNext] = useState(false);
+  const [trailingSpeaker, setTrailingSpeaker] = useState("");
+  const [trailingSpeakerHint, setTrailingSpeakerHint] = useState<
+    SpeakerCharacter | undefined
+  >();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteProgress, setDeleteProgress] = useState(0);
   const [deleteStage, setDeleteStage] = useState("");
@@ -382,6 +530,21 @@ export function ManuscriptStudioClient({
           rosterPick as SpeakerCharacter[]
         )
       );
+      const idx = lines.findIndex((l) => l.id === textSelection.lineId);
+      const nextLine = idx >= 0 && idx + 1 < lines.length ? lines[idx + 1]! : null;
+      const canMerge =
+        !!nextLine &&
+        trailingTextStartsDialogue(line.line_text, textSelection.end);
+      setMergeTrailingIntoNext(false);
+      if (canMerge && nextLine) {
+        setTrailingSpeaker(
+          resolveSpeakerIdFromLine(
+            nextLine.speaker_label,
+            nextLine.speaker_character_id,
+            rosterPick as SpeakerCharacter[]
+          )
+        );
+      }
     }
   }, [textSelection, lines, rosterPick]);
 
@@ -400,7 +563,7 @@ export function ManuscriptStudioClient({
     lineId: string,
     body: Record<string, unknown>
   ): Promise<boolean> {
-    const res = await fetch(`/api/books/${bookId}/lines/${lineId}`, {
+    const res = await fetchWithTimeout(`/api/books/${bookId}/lines/${lineId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -409,6 +572,7 @@ export function ManuscriptStudioClient({
       const data = await res.json().catch(() => ({}));
       throw new Error((data as { error?: string }).error ?? "Save failed");
     }
+    void refreshUndoCount();
     return true;
   }
 
@@ -416,7 +580,7 @@ export function ManuscriptStudioClient({
     lineIds: string[],
     body: Record<string, unknown>
   ): Promise<boolean> {
-    const res = await fetch(`/api/books/${bookId}/lines/bulk`, {
+    const res = await fetchWithTimeout(`/api/books/${bookId}/lines/bulk`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ line_ids: lineIds, ...body }),
@@ -425,6 +589,7 @@ export function ManuscriptStudioClient({
       const data = await res.json().catch(() => ({}));
       throw new Error((data as { error?: string }).error ?? "Bulk update failed");
     }
+    void refreshUndoCount();
     return true;
   }
 
@@ -549,7 +714,7 @@ export function ManuscriptStudioClient({
       }
       toast.success(`Speaker updated on ${block.line_ids.length} lines`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed");
+      toast.error(operationErrorMessage(e, "Save"));
     } finally {
       markSaving(block.line_ids, false);
     }
@@ -569,7 +734,7 @@ export function ManuscriptStudioClient({
           : `Included ${block.line_ids.length} lines in export`
       );
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed");
+      toast.error(operationErrorMessage(e, "Save"));
     } finally {
       markSaving(block.line_ids, false);
     }
@@ -607,7 +772,7 @@ export function ManuscriptStudioClient({
       applyLinePatch(line.id, { speaker_label, speaker_character_id });
       toast.success("Speaker updated");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed");
+      toast.error(operationErrorMessage(e, "Save"));
     } finally {
       markSaving([line.id], false);
     }
@@ -621,7 +786,7 @@ export function ManuscriptStudioClient({
       applyLinePatch(line.id, { excluded_from_export: excluded });
       toast.success(excluded ? "Line excluded from export" : "Line included in export");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed");
+      toast.error(operationErrorMessage(e, "Save"));
     } finally {
       markSaving([line.id], false);
     }
@@ -634,7 +799,7 @@ export function ManuscriptStudioClient({
       applyLinePatch(line.id, { flag_reason: null });
       toast.success("Flag cleared");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed");
+      toast.error(operationErrorMessage(e, "Save"));
     } finally {
       markSaving([line.id], false);
     }
@@ -698,13 +863,40 @@ export function ManuscriptStudioClient({
     }
   }
 
-  function handleAiApplied(applied: number) {
+  function handleAiApplied({
+    applied,
+    changes,
+  }: {
+    applied: number;
+    changes: AiReviewAppliedChange[];
+  }) {
+    if (applied > 0 && changes.length > 0) {
+      const byId = new Map(changes.map((c) => [c.line_id, c]));
+      setLines((prev) =>
+        prev.map((line) => {
+          const update = byId.get(line.id);
+          if (!update) return line;
+          const char =
+            rosterCharacters.find((c) => c.id === update.speaker_character_id) ??
+            findCharacterBySpeaker(update.speaker_label, rosterCharacters);
+          return {
+            ...line,
+            speaker_label: update.speaker_label,
+            speaker_character_id: update.speaker_character_id,
+            flag_reason: update.flag_reason,
+            voice_id: char?.elevenlabs_voice_id ?? null,
+            voice_name: char?.elevenlabs_voice_name ?? null,
+            voice_playback: voicePlaybackFromCharacter(char),
+          };
+        })
+      );
+    }
     toast.success(
       applied > 0
         ? `Applied ${applied} speaker update${applied === 1 ? "" : "s"}`
         : "No changes applied"
     );
-    router.refresh();
+    startTransition(() => router.refresh());
   }
 
   function openChapterDialog() {
@@ -727,7 +919,7 @@ export function ManuscriptStudioClient({
 
     setChapterSaving(true);
     try {
-      const res = await fetch(`/api/books/${bookId}/chapters`, {
+      const res = await fetchWithTimeout(`/api/books/${bookId}/chapters`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -744,9 +936,8 @@ export function ManuscriptStudioClient({
       setBookChapters((data as { chapters: BookChapterRow[] }).chapters ?? []);
       setChapterDialogOpen(false);
       toast.success("Chapter start saved");
-      startTransition(() => router.refresh());
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not set chapter");
+      toast.error(operationErrorMessage(e, "Set chapter"));
     } finally {
       setChapterSaving(false);
     }
@@ -755,7 +946,7 @@ export function ManuscriptStudioClient({
   async function rebuildChaptersFromHeadings() {
     setChapterSaving(true);
     try {
-      const res = await fetch(`/api/books/${bookId}/chapters`, {
+      const res = await fetchWithTimeout(`/api/books/${bookId}/chapters`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "rebuild" }),
@@ -770,9 +961,8 @@ export function ManuscriptStudioClient({
       toast.success(
         `Rebuilt ${((data as { rebuilt?: number }).rebuilt ?? 0).toLocaleString()} chapters from headings`
       );
-      startTransition(() => router.refresh());
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Rebuild failed");
+      toast.error(operationErrorMessage(e, "Rebuild"));
     } finally {
       setChapterSaving(false);
     }
@@ -781,9 +971,10 @@ export function ManuscriptStudioClient({
   async function repairSpeechTags() {
     setRepairTagsBusy(true);
     try {
-      const res = await fetch(`/api/books/${bookId}/repair-speech-tags`, {
-        method: "POST",
-      });
+      const res = await fetchWithTimeout(
+        `/api/books/${bookId}/repair-speech-tags`,
+        { method: "POST" }
+      );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error((data as { error?: string }).error ?? "Repair failed");
@@ -799,7 +990,7 @@ export function ManuscriptStudioClient({
         toast.message("All speech tags from Word are already in the manuscript");
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Repair failed");
+      toast.error(operationErrorMessage(e, "Repair"));
     } finally {
       setRepairTagsBusy(false);
     }
@@ -891,7 +1082,7 @@ export function ManuscriptStudioClient({
       toast.success(`Updated speaker on ${ids.length} lines`);
       clearSelection();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Bulk update failed");
+      toast.error(operationErrorMessage(e, "Bulk update"));
     } finally {
       setBulkSaving(false);
       markSaving(ids, false);
@@ -899,14 +1090,18 @@ export function ManuscriptStudioClient({
   }
 
   async function applyTextSplit() {
-    if (!textSelection || !splitSpeaker) return;
+    if (!textSelection) return;
+    if (!splitSpeaker) {
+      toast.error("Choose a speaker voice before splitting");
+      return;
+    }
     const line = lines.find((l) => l.id === textSelection.lineId);
     if (
       line &&
       isSplitInsideQuote(line.line_text, textSelection.start, textSelection.end)
     ) {
       toast.error(
-        "Can't split inside quoted dialogue. Select text outside quotes or the full spoken line."
+        "Can't split inside quoted dialogue. Select the narration before the quote, the full quoted line (with quote marks), or turn on Move dialogue to next line."
       );
       return;
     }
@@ -915,9 +1110,27 @@ export function ManuscriptStudioClient({
       rosterCharacters,
       splitSpeakerHint
     );
+    const idx = lines.findIndex((l) => l.id === textSelection.lineId);
+    const nextLine = idx >= 0 && idx + 1 < lines.length ? lines[idx + 1]! : null;
+    const canMergeTrailing =
+      !!line &&
+      !!nextLine &&
+      trailingTextStartsDialogue(line.line_text, textSelection.end);
+    const mergeTrailing = canMergeTrailing && mergeTrailingIntoNext;
+    let trailing_speaker_label: string | undefined;
+    let trailing_speaker_character_id: string | null | undefined;
+    if (mergeTrailing && trailingSpeaker) {
+      const trailing = resolveSpeaker(
+        trailingSpeaker,
+        rosterCharacters,
+        trailingSpeakerHint
+      );
+      trailing_speaker_label = trailing.speaker_label;
+      trailing_speaker_character_id = trailing.speaker_character_id;
+    }
     setSplitBusy(true);
     try {
-      const res = await fetch(`/api/books/${bookId}/lines/split`, {
+      const res = await fetchWithTimeout(`/api/books/${bookId}/lines/split`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -926,20 +1139,101 @@ export function ManuscriptStudioClient({
           end: textSelection.end,
           speaker_label,
           speaker_character_id,
+          merge_trailing_into_next: mergeTrailing || undefined,
+          trailing_speaker_label,
+          trailing_speaker_character_id,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error((data as { error?: string }).error ?? "Split failed");
       }
-      toast.success("Selection split into separate lines");
+      const payload = data as {
+        lines?: SplitLineRow[];
+        inserted_count?: number;
+        split_at_order?: number;
+      };
+      if (payload.lines && payload.lines.length > 0) {
+        setLines((prev) =>
+          mergeSplitIntoLines(
+            prev,
+            payload.lines!,
+            rosterCharacters,
+            payload.split_at_order ?? line?.line_order ?? 0,
+            payload.inserted_count ?? 0
+          )
+        );
+      }
+      toast.success(
+        mergeTrailing
+          ? "Line split — dialogue added to the line below"
+          : "Line split — new line added below"
+      );
       setTextSelection(null);
       window.getSelection()?.removeAllRanges();
-      router.refresh();
+      void refreshUndoCount();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Split failed");
+      toast.error(operationErrorMessage(e, "Split"));
     } finally {
       setSplitBusy(false);
+    }
+  }
+
+  async function applyLineReorder(draggedId: string, targetId: string) {
+    if (draggedId === targetId || reorderBusy) return;
+
+    const targetOrder = targetLineOrderForDrop(lines, draggedId, targetId);
+    const reordered = reorderManuscriptLines(lines, draggedId, targetId);
+    if (targetOrder == null || !reordered) return;
+
+    const previousLines = lines;
+    setLines(reordered);
+    setReorderBusy(true);
+    markSaving([draggedId], true);
+
+    try {
+      const res = await fetchWithTimeout(`/api/books/${bookId}/lines/reorder`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          line_id: draggedId,
+          target_line_order: targetOrder,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error ?? "Reorder failed");
+      }
+
+      const orderMap = new Map(
+        (
+          data as { line_orders?: { id: string; line_order: number }[] }
+        ).line_orders?.map((row) => [row.id, row.line_order]) ?? []
+      );
+      if (orderMap.size > 0) {
+        setLines((prev) =>
+          [...prev]
+            .map((line) => ({
+              ...line,
+              line_order: orderMap.get(line.id) ?? line.line_order,
+            }))
+            .sort((a, b) => a.line_order - b.line_order)
+        );
+      }
+
+      toast.success("Line moved");
+      void refreshUndoCount();
+      // Intentionally do NOT call router.refresh() here: the server response's
+      // `line_orders` is authoritative and already applied above. Re-running the
+      // server render can return stale ordering (or fail) and clobber the move.
+    } catch (e) {
+      setLines(previousLines);
+      toast.error(operationErrorMessage(e, "Reorder"));
+    } finally {
+      setReorderBusy(false);
+      markSaving([draggedId], false);
+      setDraggingLineId(null);
+      setDragOverLineId(null);
     }
   }
 
@@ -949,9 +1243,43 @@ export function ManuscriptStudioClient({
       toast.error("Select adjacent lines in the manuscript to merge");
       return;
     }
+
+    // Apply the merge optimistically (mirrors the server: combine text into the
+    // first line, drop the rest, renumber) so the result is visible immediately
+    // instead of depending on a full server re-render.
+    const selected = lines
+      .filter((l) => ids.includes(l.id))
+      .sort((a, b) => a.line_order - b.line_order);
+    if (selected.length < 2) return;
+    const first = selected[0]!;
+    const mergedText = selected
+      .map((l) => l.line_text.trim())
+      .filter(Boolean)
+      .join(" ");
+    const keepFlag = selected.some((l) => l.flag_reason);
+    const removeIds = new Set(selected.slice(1).map((l) => l.id));
+
+    const previousLines = lines;
+    setLines((prev) =>
+      prev
+        .filter((l) => !removeIds.has(l.id))
+        .map((l) =>
+          l.id === first.id
+            ? {
+                ...l,
+                line_text: mergedText,
+                human_reviewed: true,
+                flag_reason: keepFlag ? first.flag_reason : null,
+              }
+            : l
+        )
+        .sort((a, b) => a.line_order - b.line_order)
+        .map((l, i) => ({ ...l, line_order: i }))
+    );
     setBulkSaving(true);
+
     try {
-      const res = await fetch(`/api/books/${bookId}/lines/merge`, {
+      const res = await fetchWithTimeout(`/api/books/${bookId}/lines/merge`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ line_ids: ids }),
@@ -962,9 +1290,10 @@ export function ManuscriptStudioClient({
       }
       toast.success(`Merged ${ids.length} lines into one`);
       clearSelection();
-      router.refresh();
+      void refreshUndoCount();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Merge failed");
+      setLines(previousLines);
+      toast.error(operationErrorMessage(e, "Merge"));
     } finally {
       setBulkSaving(false);
     }
@@ -982,7 +1311,7 @@ export function ManuscriptStudioClient({
     }, 180);
 
     try {
-      const res = await fetch(`/api/books/${bookId}/lines/delete`, {
+      const res = await fetchWithTimeout(`/api/books/${bookId}/lines/delete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ line_ids: ids }),
@@ -1013,8 +1342,9 @@ export function ManuscriptStudioClient({
         `Removed ${((data as { deleted?: number }).deleted ?? count).toLocaleString()} lines from the manuscript`
       );
       setDeleteOpen(false);
+      void refreshUndoCount();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Delete failed");
+      toast.error(operationErrorMessage(e, "Delete"));
     } finally {
       window.clearInterval(tick);
       setBulkSaving(false);
@@ -1042,7 +1372,7 @@ export function ManuscriptStudioClient({
       );
       clearSelection();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Bulk update failed");
+      toast.error(operationErrorMessage(e, "Bulk update"));
     } finally {
       setBulkSaving(false);
       markSaving(ids, false);
@@ -1074,6 +1404,18 @@ export function ManuscriptStudioClient({
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key.toLowerCase() === "z" &&
+        !e.shiftKey
+      ) {
+        if (!isEditableTarget(e.target)) {
+          e.preventDefault();
+          void applyUndo();
+        }
+        return;
+      }
+
       if (isEditableTarget(e.target)) return;
 
       const command = findCommandForEvent(e, loadHotkeyConfig());
@@ -1160,6 +1502,7 @@ export function ManuscriptStudioClient({
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handlers read latest state
   }, [
+    applyUndo,
     selectedIds,
     textSelection,
     splitSpeaker,
@@ -1171,6 +1514,21 @@ export function ManuscriptStudioClient({
   const textSelectionLine = textSelection
     ? lines.find((l) => l.id === textSelection.lineId)
     : null;
+  const textSelectionLineIndex = textSelectionLine
+    ? lines.findIndex((l) => l.id === textSelectionLine.id)
+    : -1;
+  const textSelectionNextLine =
+    textSelectionLineIndex >= 0 && textSelectionLineIndex + 1 < lines.length
+      ? lines[textSelectionLineIndex + 1]!
+      : null;
+  const canMergeTrailingIntoNext =
+    !!textSelectionLine &&
+    !!textSelectionNextLine &&
+    !!textSelection &&
+    trailingTextStartsDialogue(
+      textSelectionLine.line_text,
+      textSelection.end
+    );
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] max-w-7xl mx-auto w-full px-2 sm:px-0">
@@ -1181,19 +1539,40 @@ export function ManuscriptStudioClient({
         >
           ← {bookTitle}
         </Link>
-        <h1 className="font-serif text-h1 mt-3">Speaker studio</h1>
-        <p className="mt-2 text-body-sm text-slate max-w-2xl">
-          Line-by-line speaker and voice editing. Use the checkbox to select lines
-          for merge, delete, or bulk actions; click line text to focus. To remove
-          back matter, use{" "}
-          <Link
-            href={`/books/${bookId}/cleanup`}
-            className="text-burgundy underline underline-offset-2"
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <h1 className="font-serif text-h1">Speaker studio</h1>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={toggleControls}
+            aria-expanded={controlsOpen}
+            className="shrink-0"
           >
-            Manuscript cleanup
-          </Link>
-          . Highlight text to split lines.
-        </p>
+            <SlidersHorizontal className="h-3.5 w-3.5 mr-1.5" />
+            {controlsOpen ? "Hide controls" : "Show controls"}
+            <ChevronDown
+              className={`h-3.5 w-3.5 ml-1.5 transition-transform ${
+                controlsOpen ? "rotate-180" : ""
+              }`}
+            />
+          </Button>
+        </div>
+        {controlsOpen && (
+          <p className="mt-2 text-body-sm text-slate max-w-2xl">
+            Line-by-line speaker and voice editing. Use the checkbox to select
+            lines for merge, delete, or bulk actions; click line text to focus.
+            To remove back matter, use{" "}
+            <Link
+              href={`/books/${bookId}/cleanup`}
+              className="text-burgundy underline underline-offset-2"
+            >
+              Manuscript editor
+            </Link>
+            . Highlight text to split lines. Drag the grip handle on each line to
+            reorder.
+          </p>
+        )}
         <p className="mt-2 text-body-sm text-slate tabular-nums">
           {stats.total.toLocaleString()} lines ·{" "}
           {stats.flagged.toLocaleString()} flagged ·{" "}
@@ -1215,6 +1594,8 @@ export function ManuscriptStudioClient({
           )}
         </p>
 
+        {controlsOpen && (
+        <>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <Label htmlFor="ms-search" className="text-xs">
@@ -1301,6 +1682,11 @@ export function ManuscriptStudioClient({
         </div>
 
         <div className="mt-3 flex flex-wrap gap-2">
+          <UndoEditButton
+            undoCount={undoCount}
+            busy={undoBusy}
+            onUndo={() => void applyUndo()}
+          />
           <Button
             type="button"
             variant="secondary"
@@ -1343,6 +1729,8 @@ export function ManuscriptStudioClient({
             </Button>
           )}
         </div>
+        </>
+        )}
         {aiReviewLoading && !aiPreviewOpen && (
           <div className="mt-3 rounded-lg border border-burgundy/30 bg-burgundy/5 px-4 py-3 space-y-2 max-w-xl">
             <div className="flex items-center gap-2">
@@ -1407,6 +1795,8 @@ export function ManuscriptStudioClient({
               block={block}
               characters={rosterPick}
               onCharacterCreated={handleCharacterCreated}
+              onCharacterDeleted={handleCharacterDeleted}
+              onCharacterMerged={handleCharacterMerged}
               isSelected={block.line_ids.every((id) => selectedIds.has(id))}
               isHighlighted={block.line_ids.includes(highlightLineId ?? "")}
               isSaving={block.line_ids.some((id) => savingIds.has(id))}
@@ -1433,6 +1823,8 @@ export function ManuscriptStudioClient({
               line={line}
               characters={rosterPick}
               onCharacterCreated={handleCharacterCreated}
+              onCharacterDeleted={handleCharacterDeleted}
+              onCharacterMerged={handleCharacterMerged}
               isSelected={selectedIds.has(line.id)}
               isHighlighted={highlightLineId === line.id}
               isSaving={savingIds.has(line.id)}
@@ -1448,6 +1840,22 @@ export function ManuscriptStudioClient({
               isChapterStart={chapterStartOrders.has(line.line_order)}
               selectionEnabled={!compactView}
               speechTagAfter={speechTagsByLineId[line.id] ?? null}
+              reorderEnabled={!compactView && !reorderBusy}
+              isDragging={draggingLineId === line.id}
+              isDragOver={
+                dragOverLineId === line.id && draggingLineId !== line.id
+              }
+              onReorderDragStart={(id) => setDraggingLineId(id)}
+              onReorderDragEnd={() => {
+                setDraggingLineId(null);
+                setDragOverLineId(null);
+              }}
+              onReorderDragOver={(id) => setDragOverLineId(id)}
+              onReorderDrop={(targetId) => {
+                if (draggingLineId) {
+                  void applyLineReorder(draggingLineId, targetId);
+                }
+              }}
               onTextSelected={(payload) => {
                 if (compactView) {
                   toast.message(
@@ -1474,6 +1882,14 @@ export function ManuscriptStudioClient({
           onSpeakerChange={(value, character) => {
             setSplitSpeaker(value);
             setSplitSpeakerHint(character);
+          }}
+          mergeTrailingIntoNext={mergeTrailingIntoNext}
+          onMergeTrailingIntoNextChange={setMergeTrailingIntoNext}
+          canMergeTrailingIntoNext={canMergeTrailingIntoNext}
+          trailingSpeakerValue={trailingSpeaker}
+          onTrailingSpeakerChange={(value, character) => {
+            setTrailingSpeaker(value);
+            setTrailingSpeakerHint(character);
           }}
           onCharacterCreated={handleCharacterCreated}
           onSplit={() => void applyTextSplit()}

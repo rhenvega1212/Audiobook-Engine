@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api/auth";
 import { lineBulkUpdateSchema } from "@/lib/validations";
 import { updateBookStatus } from "@/lib/books/compute-book-status";
-import { ensureEditCheckpoint } from "@/lib/books/manuscript-snapshot";
+import { createUndoCheckpoint } from "@/lib/books/manuscript-snapshot";
 
 export async function POST(
   request: Request,
@@ -29,7 +29,7 @@ export async function POST(
   };
 
   const admin = createAdminClient();
-  await ensureEditCheckpoint(admin, bookId);
+  await createUndoCheckpoint(admin, bookId, "Before bulk edit");
 
   const supabase = await createClient();
   const { data, error: dbError } = await supabase
