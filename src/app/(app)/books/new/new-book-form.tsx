@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import type { PenName, Series } from "@/lib/types/database";
 import { runBatchAiReview } from "@/lib/books/run-ai-review-client";
 
@@ -36,6 +37,8 @@ export function NewBookForm({
   const [title, setTitle] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [phase, setPhase] = useState<UploadPhase>("idle");
+  const [progress, setProgress] = useState(0);
+  const [statusMessage, setStatusMessage] = useState("");
 
   const filteredSeries = penNameId
     ? seriesList.filter((s) => s.pen_name_id === penNameId)
@@ -74,10 +77,18 @@ export function NewBookForm({
   const loading =
     phase === "uploading" || phase === "analyzing" || phase === "ai_review";
 
+  function resetProgress() {
+    setPhase("idle");
+    setProgress(0);
+    setStatusMessage("");
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!file || !seriesId || !title) return;
 
+    setProgress(2);
+    setStatusMessage("Checking series cast…");
     const readinessRes = await fetch(
       `/api/series/${seriesId}/analyze-readiness`
     );
@@ -91,10 +102,14 @@ export function NewBookForm({
           ? `Add aliases for: ${names} (Character Library) before analyzing`
           : "Series cast is not ready — add aliases for series regulars"
       );
+      setProgress(0);
+      setStatusMessage("");
       return;
     }
 
     setPhase("uploading");
+    setProgress(8);
+    setStatusMessage("Uploading manuscript…");
     const formData = new FormData();
     formData.append("series_id", seriesId);
     formData.append("title", title);
@@ -109,7 +124,7 @@ export function NewBookForm({
         toast.error(
           (data as { error?: string }).error ?? "Upload failed"
         );
-        setPhase("idle");
+        resetProgress();
         return;
       }
 
@@ -119,12 +134,14 @@ export function NewBookForm({
 
       if (!bookId) {
         toast.error("Upload succeeded but book id was missing");
-        setPhase("idle");
+        resetProgress();
         return;
       }
 
       toast.success("Manuscript uploaded");
       setPhase("analyzing");
+      setProgress(25);
+      setStatusMessage("Tagging dialogue with rules engine…");
 
       const analyzeRes = await fetch(`/api/books/${bookId}/analyze`, {
         method: "POST",
@@ -140,7 +157,7 @@ export function NewBookForm({
         );
         router.push(`/books/${bookId}`);
         router.refresh();
-        setPhase("idle");
+        resetProgress();
         return;
       }
 
@@ -150,11 +167,20 @@ export function NewBookForm({
       };
 
       setPhase("ai_review");
+      setProgress(45);
+      setStatusMessage(
+        `${summary.total_lines ?? "?"} lines tagged — starting AI review…`
+      );
       let aiCleared = 0;
       try {
         const aiResult = await runBatchAiReview(
           bookId,
-          () => {},
+          (update) => {
+            // Map the AI review's own 0–100 progress into the 45–99 band so the
+            // bar keeps climbing continuously after the rules pass.
+            setProgress(45 + Math.round((update.progress / 100) * 54));
+            setStatusMessage(update.message);
+          },
           summary.flagged_count,
           { createSnapshot: true, dialogueOnly: true }
         );
@@ -165,6 +191,8 @@ export function NewBookForm({
         );
       }
 
+      setProgress(100);
+      setStatusMessage("Done — opening review…");
       toast.success(
         `${summary.total_lines ?? "?"} lines — ${summary.flagged_count ?? "?"} flagged for review${aiCleared ? ` (${aiCleared} cleared by AI)` : ""}`
       );
@@ -178,7 +206,7 @@ export function NewBookForm({
           : "Upload failed — try again"
       );
       if (bookId) router.push(`/books/${bookId}`);
-      setPhase("idle");
+      resetProgress();
     }
   }
 
@@ -319,6 +347,24 @@ export function NewBookForm({
                   ? "AI review (batched)…"
                   : "Upload & analyze"}
           </Button>
+
+          {loading && (
+            <div className="space-y-1.5 pt-1">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-slate truncate pr-2">
+                  {statusMessage || "Working…"}
+                </span>
+                <span className="text-slate tabular-nums shrink-0">
+                  {progress}%
+                </span>
+              </div>
+              <Progress value={progress} active className="h-2.5" />
+              <p className="text-[11px] text-slate">
+                Please keep this tab open — large books can take a minute or two
+                to analyze.
+              </p>
+            </div>
+          )}
         </form>
       </CardContent>
     </Card>
