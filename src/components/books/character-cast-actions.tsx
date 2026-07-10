@@ -37,6 +37,7 @@ export function CharacterCastActions({
   onCast,
   onViewLines,
   onMerged,
+  onChanged,
 }: {
   bookId: string;
   detected: DetectedCharacter;
@@ -44,11 +45,17 @@ export function CharacterCastActions({
   onCast: () => void;
   onViewLines: () => void;
   onMerged: () => void;
+  onChanged: () => void;
 }) {
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeTargetId, setMergeTargetId] = useState("");
   const [mergeSearch, setMergeSearch] = useState("");
   const [merging, setMerging] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const mergeTargets = useMemo(
     () =>
@@ -95,6 +102,83 @@ export function CharacterCastActions({
   function closeMergeDialog() {
     setMergeOpen(false);
     setMergeSearch("");
+  }
+
+  function openRenameDialog() {
+    setRenameValue(detected.name);
+    setRenameOpen(true);
+  }
+
+  function closeRenameDialog() {
+    setRenameOpen(false);
+    setRenameValue("");
+  }
+
+  async function confirmRename() {
+    const newName = renameValue.trim();
+    if (!newName) {
+      toast.error("Enter a name");
+      return;
+    }
+    if (newName.toLowerCase() === detected.name.toLowerCase()) {
+      toast.error("Enter a different name");
+      return;
+    }
+    setRenaming(true);
+    try {
+      const res = await fetch(`/api/books/${bookId}/speakers/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          speaker_label: detected.name,
+          new_name: newName,
+          character_id: detected.matched_character_id,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error ?? "Rename failed");
+      }
+      const updated = (data as { lines_updated?: number }).lines_updated ?? 0;
+      toast.success(
+        `Renamed to "${newName}" — ${updated.toLocaleString()} line${updated === 1 ? "" : "s"} updated`
+      );
+      closeRenameDialog();
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Rename failed");
+    } finally {
+      setRenaming(false);
+    }
+  }
+
+  async function confirmDelete() {
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/books/${bookId}/speakers/remove`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          speaker_label: detected.name,
+          character_id: detected.matched_character_id,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error ?? "Delete failed");
+      }
+      const reassigned =
+        (data as { reassigned_lines?: number }).reassigned_lines ?? 0;
+      toast.success(
+        `Removed "${detected.name}" — ${reassigned.toLocaleString()} line${reassigned === 1 ? "" : "s"} set to UNKNOWN`
+      );
+      setDeleteOpen(false);
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   async function confirmMerge() {
@@ -154,6 +238,16 @@ export function CharacterCastActions({
             disabled={mergeTargets.length === 0}
           >
             Merge into another character…
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={openRenameDialog}>
+            Rename character…
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onClick={() => setDeleteOpen(true)}
+            className="text-burgundy focus:text-burgundy"
+          >
+            Delete character…
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -261,6 +355,111 @@ export function CharacterCastActions({
                 )}
               </Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={renameOpen}
+        onOpenChange={(o) => {
+          if (!renaming && !o) closeRenameDialog();
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rename &ldquo;{detected.name}&rdquo;</DialogTitle>
+            <DialogDescription>
+              All {detected.line_count.toLocaleString()} line
+              {detected.line_count === 1 ? "" : "s"} for this character will
+              use the new name.
+              {detected.matched_character_id
+                ? " The series character record is updated too."
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 pt-1">
+            <div>
+              <Label htmlFor={`rename-${detected.name}`}>New name</Label>
+              <Input
+                id={`rename-${detected.name}`}
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                className="mt-1"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void confirmRename();
+                  }
+                }}
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                onClick={closeRenameDialog}
+                disabled={renaming}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void confirmRename()}
+                disabled={renaming || !renameValue.trim()}
+              >
+                {renaming ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Renaming…
+                  </>
+                ) : (
+                  "Rename"
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={deleteOpen}
+        onOpenChange={(o) => {
+          if (!deleting && !o) setDeleteOpen(false);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete &ldquo;{detected.name}&rdquo;?</DialogTitle>
+            <DialogDescription>
+              {detected.line_count.toLocaleString()} line
+              {detected.line_count === 1 ? "" : "s"} will be set to UNKNOWN so
+              you can re-assign them.
+              {detected.matched_character_id
+                ? " The character is removed from the series cast."
+                : " This only affects lines on this book."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              variant="ghost"
+              onClick={() => setDeleteOpen(false)}
+              disabled={deleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void confirmDelete()}
+              disabled={deleting}
+            >
+              {deleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Deleting…
+                </>
+              ) : (
+                "Delete character"
+              )}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

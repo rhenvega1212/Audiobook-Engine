@@ -780,6 +780,10 @@ export function BookDetailClient({
                           router.refresh();
                           void refreshUndoCount();
                         }}
+                        onChanged={() => {
+                          router.refresh();
+                          void refreshUndoCount();
+                        }}
                       />
                     </div>
                   </TableCell>
