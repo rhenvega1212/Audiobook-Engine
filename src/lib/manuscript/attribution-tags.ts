@@ -20,6 +20,14 @@ function linesMatch(a: string, b: string): boolean {
   return normalizeLineText(a) === normalizeLineText(b);
 }
 
+/** True when `needle` appears inside `haystack` as its own phrase (verbatim import). */
+function lineContainsPhrase(haystack: string, needle: string): boolean {
+  const h = normalizeLineText(haystack);
+  const n = normalizeLineText(needle);
+  if (!h || !n) return false;
+  return h === n || h.includes(n);
+}
+
 type IdealItem =
   | { kind: "dialogue"; text: string }
   | { kind: "tag"; text: string }
@@ -75,7 +83,11 @@ export function buildAttributionTagsByLineId(
       if (item.kind === "dialogue") {
         while (lineIdx < sorted.length) {
           const candidate = sorted[lineIdx]!;
-          if (linesMatch(candidate.line_text, item.text)) {
+          // Exact match, or dialogue kept with its trailing/leading speech tag.
+          if (
+            linesMatch(candidate.line_text, item.text) ||
+            lineContainsPhrase(candidate.line_text, item.text)
+          ) {
             lastMatchedId = candidate.id;
             lineIdx++;
             break;
@@ -86,7 +98,11 @@ export function buildAttributionTagsByLineId(
       }
 
       if (item.kind === "tag") {
-        const alreadyStored = sorted.some((l) => linesMatch(l.line_text, item.text));
+        const alreadyStored = sorted.some(
+          (l) =>
+            linesMatch(l.line_text, item.text) ||
+            lineContainsPhrase(l.line_text, item.text)
+        );
         if (!alreadyStored && lastMatchedId) {
           result.set(lastMatchedId, item.text);
         }

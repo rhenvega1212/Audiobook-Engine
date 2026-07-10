@@ -119,35 +119,21 @@ function extractSpeakerFromAttribution(
   return [null, "none", false];
 }
 
+/**
+ * Emit a Narrator line with the source text unchanged.
+ *
+ * Speech tags are never stripped here. Older imports deleted leading
+ * "X said" / "he said" phrases when more narration followed, which made
+ * manuscripts look rewritten. Attribution still reads tags separately;
+ * stored line_text must stay verbatim.
+ */
 function emitNarration(
   text: string,
   paraNum: number,
-  results: TaggedLine[],
-  stripTags = true
+  results: TaggedLine[]
 ): void {
   const raw = text.trim();
   if (!raw) return;
-  if (stripTags) {
-    const remainder = stripDialogueTag(raw);
-    if (!remainder.trim()) {
-      results.push({
-        speaker: "Narrator",
-        line: raw,
-        paragraph_num: paraNum,
-        confidence: "high",
-        flag_reason: null,
-      });
-      return;
-    }
-    results.push({
-      speaker: "Narrator",
-      line: remainder.trim(),
-      paragraph_num: paraNum,
-      confidence: "high",
-      flag_reason: null,
-    });
-    return;
-  }
   results.push({
     speaker: "Narrator",
     line: raw,
@@ -157,12 +143,60 @@ function emitNarration(
   });
 }
 
+/** Join a speech tag onto dialogue so Word-like phrasing stays intact. */
+function attachSpeechTag(dialogue: string, tag: string, side: "before" | "after"): string {
+  const d = dialogue.trim();
+  const t = tag.trim();
+  if (!d) return t;
+  if (!t) return d;
+  if (side === "before") {
+    return `${t} ${d}`.replace(/\s+/g, " ").trim();
+  }
+  // `"Hello,"` + `Metatron said.` → `"Hello," Metatron said.`
+  return `${d} ${t}`.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * For TTS/export: when dialogue was stored with an attached speech tag
+ * (`"Hello," Metatron said.`), return only the quoted dialogue so the
+ * character does not speak the tag. Leaves real narration untouched.
+ */
+export function dialogueSpokenText(lineText: string): string {
+  const segments = segmentParagraphByQuotes(lineText);
+  if (segments.length === 0) return lineText.trim();
+
+  const dialogueParts = segments
+    .filter((s) => s.kind === "dialogue")
+    .map((s) => s.text.trim())
+    .filter(Boolean);
+  if (dialogueParts.length === 0) return lineText.trim();
+
+  const hasRealNarration = segments.some(
+    (s) => s.kind === "narration" && s.text.trim() && !isDialogueTagOnly(s.text)
+  );
+  if (hasRealNarration) return lineText.trim();
+
+  return dialogueParts.join(" ").trim() || lineText.trim();
+}
+
 function attributionForDialogue(
   segments: TextSegment[],
   dialogueIndex: number,
   paragraph: string
 ): string {
-  const seg = segments[dialogueIndex]!;
+  // dialogueIndex counts only dialogue segments, not the full segments array.
+  let seen = 0;
+  let seg: TextSegment | undefined;
+  for (const s of segments) {
+    if (s.kind !== "dialogue") continue;
+    if (seen === dialogueIndex) {
+      seg = s;
+      break;
+    }
+    seen++;
+  }
+  if (!seg) return "";
+
   const after = paragraph.slice(seg.end).trim();
   const before = paragraph.slice(0, seg.start).trim();
 
@@ -176,8 +210,14 @@ function attributionForDialogue(
   );
   if (beforeTag) return beforeTag[0].trim();
 
-  if (dialogueIndex + 1 < segments.length) {
-    const between = paragraph.slice(seg.end, segments[dialogueIndex + 1]!.start).trim();
+  const dialogueSegIndexes = segments
+    .map((s, i) => (s.kind === "dialogue" ? i : -1))
+    .filter((i) => i >= 0);
+  const absIndex = dialogueSegIndexes[dialogueIndex];
+  if (absIndex != null && absIndex + 1 < segments.length) {
+    const between = paragraph
+      .slice(seg.end, segments[absIndex + 1]!.start)
+      .trim();
     if (between) return between;
   }
 
@@ -254,9 +294,30 @@ function splitParagraphIntoLines(
   }
 
   let dialogueIdx = 0;
+  /** Leading tag-only narration waiting to attach to the next dialogue line. */
+  let pendingLeadingTag: string | null = null;
+
   for (const seg of segments) {
     if (seg.kind === "narration") {
-      emitNarration(seg.text, paraNum, results, true);
+      const raw = seg.text.trim();
+      if (!raw) continue;
+
+      // Pure speech tags ("Metatron said." / "he said") stay attached to the
+      // adjacent dialogue so the manuscript is not chopped into tiny orphan
+      // lines. Longer narration that only *starts* with a tag is kept whole.
+      if (isDialogueTagOnly(raw)) {
+        const prev = results[results.length - 1];
+        if (prev && prev.speaker !== "Narrator") {
+          prev.line = attachSpeechTag(prev.line, raw, "after");
+          continue;
+        }
+        pendingLeadingTag = pendingLeadingTag
+          ? attachSpeechTag(pendingLeadingTag, raw, "after")
+          : raw;
+        continue;
+      }
+
+      emitNarration(raw, paraNum, results);
       continue;
     }
 
@@ -284,7 +345,11 @@ function splitParagraphIntoLines(
     confidence = inferred.confidence;
     firstNameOnlyMatch = inferred.firstNameOnlyMatch;
 
-    const dialogueText = cleanDialogueLine(seg.text);
+    let dialogueText = cleanDialogueLine(seg.text);
+    if (pendingLeadingTag) {
+      dialogueText = attachSpeechTag(dialogueText, pendingLeadingTag, "before");
+      pendingLeadingTag = null;
+    }
 
     const rosterResolved =
       speaker === "Narrator" ||
@@ -306,6 +371,11 @@ function splitParagraphIntoLines(
       confidence,
       flag_reason: flag,
     });
+  }
+
+  // Orphan leading tag with no following dialogue — keep as Narrator, verbatim.
+  if (pendingLeadingTag) {
+    emitNarration(pendingLeadingTag, paraNum, results);
   }
 
   return results;

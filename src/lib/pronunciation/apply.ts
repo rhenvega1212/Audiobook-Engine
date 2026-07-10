@@ -1,4 +1,5 @@
 import { stripOuterQuotes } from "@/lib/engine/quote-spans";
+import { dialogueSpokenText } from "@/lib/engine/rules-engine";
 
 export type PronunciationEntry = {
   word: string;
@@ -62,12 +63,18 @@ export function findPronunciationMatches(
   return matches.sort((a, b) => a.index - b.index);
 }
 
-/** Final line text for ElevenLabs export */
+/**
+ * Final line text for ElevenLabs export / playback.
+ * When there is no explicit spoken_text override, peel attached speech tags
+ * off dialogue so characters do not speak "Metatron said".
+ */
 export function resolveSpokenLine(
   lineText: string,
   spokenText: string | null | undefined,
   dictionary: PronunciationEntry[]
 ): string {
-  const base = spokenText?.trim() ? spokenText : lineText;
+  const base = spokenText?.trim()
+    ? spokenText
+    : dialogueSpokenText(lineText);
   return applyPronunciations(stripOuterQuotes(base), dictionary);
 }
