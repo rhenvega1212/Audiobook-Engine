@@ -37,6 +37,7 @@ import {
 } from "@/lib/books/flagged-lines";
 import { useLineAudioPlayer } from "@/components/audio/line-player";
 import { findCharacterBySpeaker } from "@/lib/characters/resolve-character";
+import { buildSpeakerStudioRoster } from "@/lib/books/speaker-studio-roster";
 import { voicePlaybackFromCharacter } from "@/lib/elevenlabs/voice-cast";
 import { LineSelectionToolbar } from "@/components/manuscript/line-selection-toolbar";
 import { UndoEditButton } from "@/components/manuscript/undo-edit-button";
@@ -468,15 +469,17 @@ export function ManuscriptStudioClient({
   }, [lines]);
 
   const speakerRoster = useMemo(
-    (): SpeakerCharacter[] =>
-      rosterCharacters.map((c) => ({
-        id: c.id,
-        canonical_name: c.canonical_name,
+    () => buildSpeakerStudioRoster(lines, rosterCharacters),
+    [lines, rosterCharacters]
+  );
+
+  const rosterPick = useMemo(
+    () =>
+      speakerRoster.map((c) => ({
+        ...c,
         aliases: c.aliases ?? [],
-        elevenlabs_voice_id: c.elevenlabs_voice_id,
-        elevenlabs_voice_name: c.elevenlabs_voice_name,
       })),
-    [rosterCharacters]
+    [speakerRoster]
   );
 
   useEffect(() => {
@@ -506,16 +509,6 @@ export function ManuscriptStudioClient({
 
   const seriesVoiceAssignments = useMemo(
     () => voiceAssignmentsFromCharacters(rosterCharacters),
-    [rosterCharacters]
-  );
-
-  const rosterPick = useMemo(
-    () =>
-      rosterCharacters.map((c) => ({
-        id: c.id,
-        canonical_name: c.canonical_name,
-        aliases: c.aliases,
-      })),
     [rosterCharacters]
   );
 
