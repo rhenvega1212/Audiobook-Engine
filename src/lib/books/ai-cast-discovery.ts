@@ -12,19 +12,42 @@ export type DiscoveredCharacter = {
   aliases: string[];
 };
 
-/** Sample paragraphs spread across the whole book, capped to a char budget. */
+/** Sample beginning, middle, and end so cast discovery sees the full book. */
 function buildManuscriptSample(paragraphs: string[], maxChars: number): string {
-  const picked: string[] = [];
+  const chunks: string[] = [];
   let total = 0;
-  const step = Math.max(1, Math.ceil(paragraphs.length / 500));
+
+  function appendSlice(start: number, count: number) {
+    for (let i = start; i < Math.min(start + count, paragraphs.length); i++) {
+      const p = paragraphs[i]?.trim();
+      if (!p) continue;
+      if (total + p.length > maxChars) return false;
+      chunks.push(p);
+      total += p.length;
+    }
+    return true;
+  }
+
+  // Opening chapters (character introductions)
+  if (!appendSlice(0, 100)) return chunks.join("\n\n");
+  // Mid-book
+  const mid = Math.floor(paragraphs.length / 2);
+  if (!appendSlice(Math.max(0, mid - 30), 60)) return chunks.join("\n\n");
+  // Closing chapters
+  appendSlice(Math.max(0, paragraphs.length - 80), 80);
+
+  // Stride through the rest if budget remains
+  const step = Math.max(1, Math.ceil(paragraphs.length / 300));
   for (let i = 0; i < paragraphs.length; i += step) {
+    if (total >= maxChars) break;
     const p = paragraphs[i]?.trim();
-    if (!p) continue;
+    if (!p || chunks.includes(p)) continue;
     if (total + p.length > maxChars) break;
-    picked.push(p);
+    chunks.push(p);
     total += p.length;
   }
-  return picked.join("\n\n");
+
+  return chunks.join("\n\n");
 }
 
 function buildCastDiscoveryPrompt(
@@ -36,22 +59,25 @@ function buildCastDiscoveryPrompt(
       ? `ALREADY KNOWN (do not repeat these): ${existingNames.join(", ")}\n\n`
       : "";
 
-  return `You are analyzing a novel manuscript to build its cast of speaking characters.
+  return `You are analyzing a novel manuscript to build its cast of characters.
 
-${known}Below are excerpts sampled throughout the manuscript.
+${known}Below are excerpts from the beginning, middle, and end of the manuscript.
 
 MANUSCRIPT EXCERPTS:
 ${sample}
 
-List every character who SPEAKS dialogue in the story. For each, provide:
+List every NAMED person in the story who speaks dialogue OR is referred to by name in a way that suggests they are a character (not a historical figure mentioned once in passing).
+
+For each, provide:
 - "name": the fullest canonical form of their name used in the text (e.g. "Gabriel Cross", not just "Gabriel", if a surname appears)
 - "gender": "male", "female", or "unknown" — infer from pronouns/context; use "unknown" if genuinely unclear
 - "aliases": other names, nicknames, or titles the SAME person is called (e.g. ["Gabe", "Mr. Cross"]); use [] if none
 
 Rules:
-- Only include characters who actually speak. Exclude places, objects, groups, and the narrator.
-- Do not include one-off unnamed speakers (e.g. "a man", "the waiter", "a voice").
+- Include main characters, recurring speakers, AND named characters who appear in narration even if you are not sure they speak yet.
+- Exclude places, objects, groups, chapter titles, and one-off unnamed roles ("a man", "the waiter").
 - Merge duplicates: a first name and full name for the same person is ONE entry (put the short form in aliases).
+- When in doubt whether someone is a character, INCLUDE them — false positives are easier to fix than missing cast members.
 
 Respond with ONLY valid JSON, no markdown or explanation:
 {"characters":[{"name":"Gabriel Cross","gender":"male","aliases":["Gabe"]}]}`;
@@ -103,7 +129,7 @@ export async function discoverCastWithAI(
   apiKey: string,
   existingNames: string[]
 ): Promise<DiscoveredCharacter[]> {
-  const sample = buildManuscriptSample(paragraphs, 60000);
+  const sample = buildManuscriptSample(paragraphs, 90000);
   if (!sample.trim()) return [];
 
   const prompt = buildCastDiscoveryPrompt(sample, existingNames);
@@ -113,7 +139,7 @@ export async function discoverCastWithAI(
 
   const response = await client.messages.create({
     model,
-    max_tokens: 2048,
+    max_tokens: 4096,
     system:
       "You extract the speaking cast of a novel. Always respond with a single valid JSON object only.",
     messages: [{ role: "user", content: prompt }],

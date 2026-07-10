@@ -121,3 +121,23 @@ export function isJunkCharacterName(name: string): boolean {
   if (CANONICAL_CAST_NAMES.has(name)) return false;
   return !looksLikeProperName(name);
 }
+
+/**
+ * Relaxed name check for pre-attribution roster seeding. A single mention in the
+ * manuscript is enough — we assign lines later; missing a real character hurts
+ * more than adding a junk row the user can delete.
+ */
+export function isSeedableCharacterName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed || trimmed.length < 2) return false;
+  if (!/^[A-Z]/.test(trimmed)) return false;
+  if (/^(If|Did|When|Where|Why|How|What|Are|Is|Was|Were|Has|Have|Can|Could|Will|Would|Should)\s/i.test(trimmed)) {
+    return false;
+  }
+  if (/[.!?]$/.test(trimmed)) return false;
+  if (BLOCKLIST.has(trimmed.toLowerCase())) return false;
+  if (CANONICAL_CAST_NAMES.has(trimmed)) return false;
+  const words = trimmed.split(/\s+/);
+  if (words.length === 1 && words[0]!.length < 2) return false;
+  return true;
+}

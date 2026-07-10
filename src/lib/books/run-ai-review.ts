@@ -1,5 +1,4 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { CANONICAL_CAST_NAMES } from "@/lib/engine/unknown-speaker";
 import { createEngineCharacter } from "@/lib/engine/types";
 import { runAiAssistedPass, lineNeedsAiPass } from "@/lib/engine/ai-attribution";
 import { fetchAllTaggedLines } from "@/lib/supabase/fetch-all";
@@ -35,18 +34,14 @@ import {
 } from "./ai-review-eligibility";
 
 function rosterForBook(
-  allChars: Character[],
-  characterIdsInBook: Set<string>
+  allChars: Character[]
 ): ReturnType<typeof createEngineCharacter>[] {
-  return allChars
-    .filter(
-      (c) =>
-        characterIdsInBook.has(c.id) ||
-        CANONICAL_CAST_NAMES.has(c.canonical_name)
-    )
-    .map((c) =>
-      createEngineCharacter(c.canonical_name, c.aliases ?? [], c.gender)
-    );
+  // Use the full series roster for attribution — not only characters that
+  // already have lines on this book. Seeded names with zero lines must still be
+  // assignable targets for the AI pass.
+  return allChars.map((c) =>
+    createEngineCharacter(c.canonical_name, c.aliases ?? [], c.gender)
+  );
 }
 
 export type RunAiReviewOptions = {
@@ -77,13 +72,7 @@ async function loadAiReviewContext(admin: SupabaseClient, bookId: string) {
     .select("*")
     .eq("series_id", book.series_id);
 
-  const { data: bookChars } = await admin
-    .from("book_characters")
-    .select("character_id")
-    .eq("book_id", bookId);
-
-  const idsInBook = new Set((bookChars ?? []).map((bc) => bc.character_id));
-  const roster = rosterForBook((chars ?? []) as Character[], idsInBook);
+  const roster = rosterForBook((chars ?? []) as Character[]);
   const dbLines = await fetchAllTaggedLines(admin, bookId, "*");
   const sourceParagraphs = await fetchSourceParagraphs(admin, bookId);
 

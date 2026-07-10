@@ -5,11 +5,12 @@ import {
   processManuscriptFromParagraphs,
 } from "@/lib/engine/rules-engine";
 import { discoverCastWithAI } from "@/lib/books/ai-cast-discovery";
+import { extractMentionedNames } from "@/lib/books/seed-characters-from-text";
 import {
   extractManuscriptBlocks,
   measureManuscriptCoverage,
 } from "@/lib/engine/manuscript-extract";
-import { isValidNewCharacter } from "@/lib/engine/unknown-speaker";
+import { isValidNewCharacter, isSeedableCharacterName } from "@/lib/engine/unknown-speaker";
 import { findCharacterBySpeaker } from "@/lib/characters/resolve-character";
 import { resolveMatchStatus } from "@/lib/characters/match-status";
 import { updateBookStatus } from "@/lib/books/compute-book-status";
@@ -20,14 +21,6 @@ import type { Character } from "@/lib/types/database";
 
 const INSERT_BATCH = 500;
 const MIN_WORD_COVERAGE = 0.98;
-
-/**
- * Run AI cast discovery only when the series roster is this sparse (a cold-start
- * new series, including a re-run after a first upload that detected only a few
- * characters). Established series already have a full cast, so we skip it there
- * to avoid unnecessary API spend.
- */
-const COLD_START_ROSTER_THRESHOLD = 5;
 
 export async function analyzeBook(bookId: string, options?: { runAiReview?: boolean }) {
   const admin = createAdminClient();
@@ -87,10 +80,6 @@ async function runAnalysis(
   // character's first line resolves to them instead of landing as UNKNOWN. This
   // is the main lever for cutting manual cleanup on a fresh upload.
   const allChars: Character[] = [...((chars ?? []) as Character[])];
-  // Track characters created during this analysis so we can guarantee they end
-  // up in book_characters (and therefore in the attribution AI's roster) even
-  // if the rules pass didn't attribute any lines to them yet.
-  const createdCharIds = new Set<string>();
 
   function alreadyKnown(name: string): boolean {
     if (
@@ -122,20 +111,14 @@ async function runAnalysis(
       .single();
     if (newChar) {
       allChars.push(newChar as Character);
-      createdCharIds.add((newChar as Character).id);
     }
   }
 
-  // Cold-start cast discovery: on a nearly-empty series the attribution AI has
-  // no roster to assign to and defaults everything to UNKNOWN. Ask Claude for
-  // the speaking cast up front and create those characters (with gender, which
-  // also helps the rules engine's pronoun inference). Gated to sparse rosters
-  // so established series aren't re-charged; best-effort.
-  const namedExisting = allChars.filter(
-    (c) => c.canonical_name.toLowerCase() !== "narrator"
-  );
+  // Pass 1 — AI cast discovery: read the manuscript and create named characters
+  // before attribution. Always run when an API key is present so cold-start
+  // books (and re-runs after a sparse first pass) get a full roster.
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (apiKey && namedExisting.length < COLD_START_ROSTER_THRESHOLD) {
+  if (apiKey) {
     try {
       const discovered = await discoverCastWithAI(
         paragraphs,
@@ -151,10 +134,19 @@ async function runAnalysis(
     }
   }
 
-  // Supplement with regex-based detection of `"…," Name said` speaker tags.
-  const candidates = detectSpeakerCandidates(paragraphs);
-  for (const [name, count] of candidates) {
-    if (!isValidNewCharacter(name, count)) continue;
+  // Pass 2 — harvest every capitalized proper name mentioned in the manuscript.
+  // One mention is enough; lines are assigned in later passes.
+  const mentioned = extractMentionedNames(paragraphs);
+  for (const [name] of mentioned) {
+    if (!isSeedableCharacterName(name)) continue;
+    if (alreadyKnown(name)) continue;
+    await createCharacter(name, "unknown", []);
+  }
+
+  // Pass 3 — names beside dialogue tags (`"…," Name said`).
+  const tagCandidates = detectSpeakerCandidates(paragraphs);
+  for (const [name] of tagCandidates) {
+    if (!isSeedableCharacterName(name)) continue;
     if (alreadyKnown(name)) continue;
     await createCharacter(name, "unknown", []);
   }
@@ -265,11 +257,10 @@ async function runAnalysis(
     }
   }
 
-  // Guarantee every character created this run is linked to the book, even with
-  // zero rules-attributed lines, so the attribution AI can assign dialogue to
-  // them (its roster is drawn from book_characters).
-  for (const id of createdCharIds) {
-    if (!lineCounts.has(id)) lineCounts.set(id, 0);
+  // Link every character in the series roster to this book so the attribution
+  // AI can assign lines to seeded names that the rules pass didn't tag yet.
+  for (const c of allChars) {
+    if (!lineCounts.has(c.id)) lineCounts.set(c.id, 0);
   }
 
   const bookCharRows = [...lineCounts.entries()].map(([character_id, line_count]) => ({
