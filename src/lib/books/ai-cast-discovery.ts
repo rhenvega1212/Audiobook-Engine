@@ -66,7 +66,7 @@ ${known}Below are excerpts from the beginning, middle, and end of the manuscript
 MANUSCRIPT EXCERPTS:
 ${sample}
 
-List every NAMED person in the story who speaks dialogue OR is referred to by name in a way that suggests they are a character (not a historical figure mentioned once in passing).
+List every character who SPEAKS dialogue OR appears in a scene action beat (e.g. "Lina said", "Lina shook her head", "Michael turned to face her").
 
 For each, provide:
 - "name": the fullest canonical form of their name used in the text (e.g. "Gabriel Cross", not just "Gabriel", if a surname appears)
@@ -74,10 +74,10 @@ For each, provide:
 - "aliases": other names, nicknames, or titles the SAME person is called (e.g. ["Gabe", "Mr. Cross"]); use [] if none
 
 Rules:
-- Include main characters, recurring speakers, AND named characters who appear in narration even if you are not sure they speak yet.
-- Exclude places, objects, groups, chapter titles, and one-off unnamed roles ("a man", "the waiter").
+- Only include people who participate in scenes — speaking or acting. Exclude place names, book titles, and people mentioned only in passing ("she read about Napoleon").
+- Exclude one-off unnamed roles ("a man", "the waiter", "a voice").
 - Merge duplicates: a first name and full name for the same person is ONE entry (put the short form in aliases).
-- When in doubt whether someone is a character, INCLUDE them — false positives are easier to fix than missing cast members.
+- When unsure whether someone is an active character, omit them — false negatives are better than junk cast rows.
 
 Respond with ONLY valid JSON, no markdown or explanation:
 {"characters":[{"name":"Gabriel Cross","gender":"male","aliases":["Gabe"]}]}`;

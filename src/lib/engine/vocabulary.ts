@@ -24,6 +24,14 @@ export const DIALOGUE_VERBS = new Set([
 export const ACTION_TAG_VERBS = new Set([
   "smiled", "frowned", "nodded", "shrugged", "laughed", "sighed",
   "groaned", "winced", "blinked", "grinned",
+  "shook", "turned", "looked", "glanced", "stared", "watched",
+  "walked", "ran", "stood", "sat", "rose", "knelt", "crouched",
+  "crossed", "leaned", "stepped", "moved", "shifted", "paced", "strode",
+  "reached", "pulled", "pushed", "held", "picked", "placed",
+  "opened", "closed", "wiped", "brushed", "tossed", "caught",
+  "paused", "stopped", "waited", "listened", "entered", "left", "followed",
+  "ducked", "bent", "stretched", "spun", "whirled", "stormed", "fled",
+  "cleared", "coughed", "yawned", "trembled", "shivered", "gasped",
 ]);
 
 export const PRONOUN_GENDER: Record<string, "male" | "female" | "unknown"> = {
@@ -38,3 +46,4 @@ export const PRONOUN_GENDER: Record<string, "male" | "female" | "unknown"> = {
 };
 
 export const DIALOGUE_VERBS_PATTERN = Array.from(DIALOGUE_VERBS).join("|");
+export const ACTION_TAG_VERBS_PATTERN = Array.from(ACTION_TAG_VERBS).join("|");

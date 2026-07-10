@@ -1,11 +1,10 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createEngineCharacter } from "@/lib/engine/types";
 import {
-  detectSpeakerCandidates,
+  detectCharacterContextCandidates,
   processManuscriptFromParagraphs,
 } from "@/lib/engine/rules-engine";
 import { discoverCastWithAI } from "@/lib/books/ai-cast-discovery";
-import { extractMentionedNames } from "@/lib/books/seed-characters-from-text";
 import {
   extractManuscriptBlocks,
   measureManuscriptCoverage,
@@ -134,18 +133,10 @@ async function runAnalysis(
     }
   }
 
-  // Pass 2 — harvest every capitalized proper name mentioned in the manuscript.
-  // One mention is enough; lines are assigned in later passes.
-  const mentioned = extractMentionedNames(paragraphs);
-  for (const [name] of mentioned) {
-    if (!isSeedableCharacterName(name)) continue;
-    if (alreadyKnown(name)) continue;
-    await createCharacter(name, "unknown", []);
-  }
-
-  // Pass 3 — names beside dialogue tags (`"…," Name said`).
-  const tagCandidates = detectSpeakerCandidates(paragraphs);
-  for (const [name] of tagCandidates) {
+  // Pass 2 — names in character context (`Lina said`, `Lina shook her head`).
+  // Skips bare mentions in narration ("Lina's favorite wine", place names).
+  const contextCandidates = detectCharacterContextCandidates(paragraphs);
+  for (const [name] of contextCandidates) {
     if (!isSeedableCharacterName(name)) continue;
     if (alreadyKnown(name)) continue;
     await createCharacter(name, "unknown", []);

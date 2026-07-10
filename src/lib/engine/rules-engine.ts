@@ -1,9 +1,10 @@
 import type { EngineCharacter, ProcessResult, TaggedLine } from "./types";
 import { NAME_RE, DIALOGUE_TAG_START_RE, CHAPTER_HEADING_RE, CHAPTER_NUMBER_RE } from "./regex";
-import { DIALOGUE_VERBS, ACTION_TAG_VERBS, PRONOUN_GENDER, DIALOGUE_VERBS_PATTERN } from "./vocabulary";
+import { DIALOGUE_VERBS, ACTION_TAG_VERBS, PRONOUN_GENDER, DIALOGUE_VERBS_PATTERN, ACTION_TAG_VERBS_PATTERN } from "./vocabulary";
 import { flagReasonForLine, type FlagContext } from "./flag-policy";
 import { resolveFirstNameToCanonical } from "./resolve-first-name";
 import { segmentParagraphByQuotes, type TextSegment } from "./quote-spans";
+import { isJunkCharacterName } from "./unknown-speaker";
 
 function findCharacter(
   name: string,
@@ -55,6 +56,23 @@ function nameAppearsWithDialogueVerb(text: string, name: string): boolean {
   return pattern.test(text);
 }
 
+function nameAppearsWithActionBeat(text: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(
+    `\\b${escaped}\\b\\s+(?:\\w+\\s+){0,4}(?:${ACTION_TAG_VERBS_PATTERN})\\b`,
+    "i"
+  );
+  return pattern.test(text);
+}
+
+/** True when a name sits in a speech tag or action beat — not bare narration. */
+export function nameAppearsInCharacterContext(text: string, name: string): boolean {
+  return (
+    nameAppearsWithDialogueVerb(text, name) ||
+    nameAppearsWithActionBeat(text, name)
+  );
+}
+
 function extractSpeakerFromAttribution(
   attributionText: string,
   roster: EngineCharacter[],
@@ -76,14 +94,14 @@ function extractSpeakerFromAttribution(
   for (const candidate of nameCandidates) {
     const char = findCharacter(candidate, roster);
     if (char) {
-      if (!hasVerb || !nameAppearsWithDialogueVerb(attributionForNames, candidate)) {
+      if (!nameAppearsInCharacterContext(attributionForNames, candidate)) {
         continue;
       }
       return [char.canonical_name, "high", false];
     }
     const byFirst = resolveFirstNameToCanonical(candidate, roster);
     if (byFirst) {
-      if (!hasVerb || !nameAppearsWithDialogueVerb(attributionForNames, candidate)) {
+      if (!nameAppearsInCharacterContext(attributionForNames, candidate)) {
         continue;
       }
       return [byFirst.canonical_name, "medium", true];
@@ -350,16 +368,45 @@ function coalesceNarratorRuns(lines: TaggedLine[]): TaggedLine[] {
 }
 
 /**
- * Scan paragraphs for likely speaker names — capitalized names that sit next to
- * a dialogue verb in a quote's attribution context (e.g. `"…," Blake said` or
- * `Blake asked, "…"`). Used to seed the character roster BEFORE attribution so a
- * character's very first line resolves to them instead of landing as UNKNOWN
- * (which is what forces manual cleanup on the first upload).
- *
- * Returns name → number of dialogue-tag occurrences so callers can require a
- * minimum count and ignore one-off false positives.
+ * High-recall name sweep: every capitalized proper name that appears in the
+ * manuscript (2+ times), with its mention count, minus obvious junk (common
+ * words, sentence openers on the blocklist). This is the "collect every name"
+ * stage — deliberately over-inclusive; the AI cast-discovery step decides which
+ * are real speaking characters. Returned most-frequent first, capped to `limit`.
  */
-export function detectSpeakerCandidates(
+export function extractNameCandidates(
+  paragraphs: string[],
+  limit = 80
+): { name: string; count: number }[] {
+  const counts = new Map<string, number>();
+
+  for (const para of paragraphs) {
+    if (
+      CHAPTER_HEADING_RE.test(para) ||
+      CHAPTER_NUMBER_RE.test(para) ||
+      SCENE_BREAK_RE.test(para)
+    ) {
+      continue;
+    }
+    for (const m of para.matchAll(NAME_RE)) {
+      const name = m[1]!.trim();
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+  }
+
+  return [...counts.entries()]
+    .filter(([name, count]) => count >= 2 && !isJunkCharacterName(name))
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit);
+}
+
+/**
+ * Scan paragraphs for names that appear in character context — speech tags
+ * (`Lina said`) or action beats (`Lina shook her head`) — not bare mentions in
+ * narration. Used to seed the roster before attribution.
+ */
+export function detectCharacterContextCandidates(
   paragraphs: string[]
 ): Map<string, number> {
   const counts = new Map<string, number>();
@@ -373,6 +420,19 @@ export function detectSpeakerCandidates(
       continue;
     }
 
+    // Strip quoted dialogue so names *inside* speech don't seed false characters.
+    const narration = stripQuotedSpansForAttribution(para);
+    const seen = new Set<string>();
+    for (const m of narration.matchAll(NAME_RE)) {
+      const name = m[1]!;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      if (nameAppearsInCharacterContext(narration, name)) {
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+      }
+    }
+
+    // Also check tight attribution windows beside quotes.
     const segments = segmentParagraphByQuotes(para);
     if (segments.length === 0) continue;
 
@@ -388,12 +448,9 @@ export function detectSpeakerCandidates(
 
       const attributionForNames =
         stripQuotedSpansForAttribution(attributionContext);
-      const seen = new Set<string>();
       for (const m of attributionForNames.matchAll(NAME_RE)) {
         const name = m[1]!;
-        if (seen.has(name)) continue;
-        seen.add(name);
-        if (nameAppearsWithDialogueVerb(attributionForNames, name)) {
+        if (nameAppearsInCharacterContext(attributionForNames, name)) {
           counts.set(name, (counts.get(name) ?? 0) + 1);
         }
       }
@@ -401,6 +458,13 @@ export function detectSpeakerCandidates(
   }
 
   return counts;
+}
+
+/** @deprecated Use detectCharacterContextCandidates */
+export function detectSpeakerCandidates(
+  paragraphs: string[]
+): Map<string, number> {
+  return detectCharacterContextCandidates(paragraphs);
 }
 
 export function processManuscriptFromParagraphs(
