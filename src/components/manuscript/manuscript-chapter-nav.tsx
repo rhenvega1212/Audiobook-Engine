@@ -50,7 +50,7 @@ export function ManuscriptChapterNav({
   return (
     <aside
       className={cn(
-        "shrink-0 flex flex-col gap-3 w-full lg:w-56 border border-border-muted rounded-lg bg-warm-sand/30 p-3",
+        "shrink-0 flex flex-col gap-3 w-full lg:w-48 lg:self-stretch border border-border-muted rounded-lg bg-warm-sand/30 p-3",
         className
       )}
     >
@@ -130,7 +130,7 @@ export function ManuscriptChapterNav({
         </Button>
       </div>
 
-      <ul className="hidden lg:block flex-1 min-h-0 overflow-y-auto space-y-0.5 text-[11px] max-h-[min(50vh,28rem)]">
+      <ul className="hidden lg:block flex-1 min-h-0 overflow-y-auto space-y-0.5 text-xs">
         <li>
           <button
             type="button"

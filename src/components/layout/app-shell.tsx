@@ -1,8 +1,10 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import { SidebarDesktop, SidebarMobile, SidebarExpandButton } from "./sidebar";
 import { SidebarProvider } from "./sidebar-context";
 import { ReportIssueButton } from "@/components/issues/report-issue-button";
+import { cn } from "@/lib/utils";
 
 export function AppShell({
   userEmail,
@@ -17,6 +19,11 @@ export function AppShell({
   openIssueCount?: number;
   children: React.ReactNode;
 }) {
+  const pathname = usePathname();
+  const isStudioWorkspace = /\/books\/[^/]+\/(manuscript|cleanup)(\/|$)/.test(
+    pathname ?? ""
+  );
+
   return (
     <SidebarProvider>
       <div className="flex min-h-screen bg-cream">
@@ -33,7 +40,14 @@ export function AppShell({
             showAdminIssues={showAdminIssues}
             openIssueCount={openIssueCount}
           />
-          <main className="flex-1 px-4 py-6 lg:px-8 lg:py-8 w-full max-w-5xl mx-auto">
+          <main
+            className={cn(
+              "flex-1 w-full mx-auto",
+              isStudioWorkspace
+                ? "px-3 py-2 lg:px-5 lg:py-3 max-w-none"
+                : "px-4 py-6 lg:px-8 lg:py-8 max-w-5xl"
+            )}
+          >
             {children}
           </main>
         </div>

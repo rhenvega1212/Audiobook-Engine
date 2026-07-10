@@ -64,7 +64,7 @@ export function CompactSpeakerBlock({
               }
             : undefined
         }
-        className={`font-serif text-sm whitespace-pre-wrap break-words ${
+        className={`font-serif text-base leading-relaxed whitespace-pre-wrap break-words ${
           onBodyClick ? "cursor-pointer" : ""
         } ${excluded ? "line-through text-slate" : "text-ink"}`}
       >

@@ -200,12 +200,12 @@ export function ManuscriptStudioClient({
   const { playingId, loadingId, playLine } = useLineAudioPlayer();
   const [lines, setLines] = useState(initialLines);
   const [rosterCharacters, setRosterCharacters] = useState(characters);
-  const [controlsOpen, setControlsOpen] = useState(true);
+  const [controlsOpen, setControlsOpen] = useState(false);
 
   useEffect(() => {
     try {
-      if (localStorage.getItem("ms-controls-open") === "0") {
-        setControlsOpen(false);
+      if (localStorage.getItem("ms-controls-open") === "1") {
+        setControlsOpen(true);
       }
     } catch {
       // ignore
@@ -795,6 +795,78 @@ export function ManuscriptStudioClient({
       toast.error(operationErrorMessage(e, "Save"));
     } finally {
       markSaving([line.id], false);
+    }
+  }
+
+  async function handleLineTextSave(line: ManuscriptLine, lineText: string) {
+    markSaving([line.id], true);
+    try {
+      await patchLine(line.id, { line_text: lineText });
+      applyLinePatch(line.id, { line_text: lineText });
+    } catch (e) {
+      toast.error(operationErrorMessage(e, "Save"));
+      throw e;
+    } finally {
+      markSaving([line.id], false);
+    }
+  }
+
+  async function handleBlockTextSave(
+    block: SpeakerBlock<ManuscriptLine>,
+    text: string
+  ) {
+    const lineIds = block.line_ids;
+    markSaving(lineIds, true);
+    try {
+      if (block.lines.length === 1) {
+        await patchLine(block.lines[0]!.id, { line_text: text });
+        applyLinePatch(block.lines[0]!.id, { line_text: text });
+        return;
+      }
+
+      const res = await fetchWithTimeout(
+        `/api/books/${bookId}/lines/edit-paragraph`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ line_ids: lineIds, text }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error ?? "Save failed");
+      }
+
+      const {
+        kept_line_id,
+        deleted_line_ids,
+        line_text,
+        chapters,
+      } = data as {
+        kept_line_id: string | null;
+        deleted_line_ids: string[];
+        line_text: string;
+        chapters?: BookChapterRow[];
+      };
+      const deleted = new Set(deleted_line_ids ?? []);
+      setLines((prev) => {
+        let next = prev.filter((l) => !deleted.has(l.id));
+        if (kept_line_id) {
+          next = next.map((l) =>
+            l.id === kept_line_id ? { ...l, line_text } : l
+          );
+        }
+        return next
+          .sort((a, b) => a.line_order - b.line_order)
+          .map((l, i) => ({ ...l, line_order: i }));
+      });
+      if (chapters) setBookChapters(chapters);
+      void refreshUndoCount();
+    } catch (e) {
+      toast.error(operationErrorMessage(e, "Save"));
+      throw e;
+    } finally {
+      markSaving(lineIds, false);
     }
   }
 
@@ -1524,8 +1596,8 @@ export function ManuscriptStudioClient({
     );
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)] max-w-7xl mx-auto w-full px-2 sm:px-0">
-      <div className="shrink-0 pb-4">
+    <div className="flex flex-col h-[calc(100dvh-3.5rem)] w-full max-w-none">
+      <div className={`shrink-0 ${controlsOpen ? "pb-3" : "pb-2"}`}>
         <Link
           href={`/books/${bookId}`}
           className="text-body-sm text-teal hover:underline"
@@ -1553,9 +1625,10 @@ export function ManuscriptStudioClient({
         </div>
         {controlsOpen && (
           <p className="mt-2 text-body-sm text-slate max-w-2xl">
-            Line-by-line speaker and voice editing. Use the checkbox to select
-            lines for merge, delete, or bulk actions; click line text to focus.
-            To remove back matter, use{" "}
+            Line-by-line speaker and voice editing. Click line text to rewrite,
+            retype, or delete — cut, copy, and paste work as usual. Use the
+            checkbox to select lines for merge, delete, or bulk actions. To
+            remove back matter, use{" "}
             <Link
               href={`/books/${bookId}/cleanup`}
               className="text-burgundy underline underline-offset-2"
@@ -1740,7 +1813,7 @@ export function ManuscriptStudioClient({
         )}
       </div>
 
-      <div className="flex flex-1 min-h-0 gap-4 flex-col lg:flex-row">
+      <div className="flex flex-1 min-h-0 gap-3 flex-col lg:flex-row">
         {lines.length > 0 && (
           <ManuscriptChapterNav
             chapters={chapters}
@@ -1780,8 +1853,8 @@ export function ManuscriptStudioClient({
           items={blocks.map((b) => ({ ...b, id: b.key }))}
           scrollToIndex={scrollToIndex}
           scrollKey={scrollKey}
-          rowHeight={140}
-          className="flex-1 min-h-0 border border-border-muted rounded-lg bg-cream/50 px-2 py-2"
+          rowHeight={152}
+          className="flex-1 min-h-0 border border-border-muted rounded-lg bg-cream/50 px-3 py-2"
           renderRow={(block) => (
             <ManuscriptCompactBlockRow
               bookId={bookId}
@@ -1801,6 +1874,7 @@ export function ManuscriptStudioClient({
               onToggleExclude={handleBlockToggleExclude}
               onPlay={handleBlockPlay}
               onCastVoice={handleBlockCastVoice}
+              onBlockTextSave={handleBlockTextSave}
             />
           )}
         />
@@ -1809,7 +1883,8 @@ export function ManuscriptStudioClient({
           items={filtered}
           scrollToIndex={scrollToIndex}
           scrollKey={scrollKey}
-          className="flex-1 min-h-0 border border-border-muted rounded-lg bg-cream/50 px-2 py-2"
+          className="flex-1 min-h-0 border border-border-muted rounded-lg bg-cream/50 px-3 py-2"
+          rowHeight={152}
           renderRow={(line) => (
             <ManuscriptLineRow
               bookId={bookId}
@@ -1828,6 +1903,7 @@ export function ManuscriptStudioClient({
               onSpeakerChange={handleSpeakerChange}
               onToggleExclude={handleToggleExclude}
               onClearFlag={handleClearFlag}
+              onLineTextSave={handleLineTextSave}
               onPlay={handlePlay}
               onCastVoice={handleCastVoice}
               isChapterStart={chapterStartOrders.has(line.line_order)}

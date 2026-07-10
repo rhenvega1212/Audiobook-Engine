@@ -62,6 +62,7 @@ export const lineUpdateSchema = z.object({
   spoken_text: z.string().nullable().optional(),
   flag_reason: z.string().nullable().optional(),
   excluded_from_export: z.boolean().optional(),
+  line_text: z.string().min(1).optional(),
 });
 
 export const lineBulkUpdateSchema = z.object({

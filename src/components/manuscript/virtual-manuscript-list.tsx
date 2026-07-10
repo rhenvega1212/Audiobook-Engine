@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 
-const DEFAULT_ROW_HEIGHT = 120;
+const DEFAULT_ROW_HEIGHT = 136;
 const OVERSCAN = 8;
 /** Below this count, use native scroll (rows vary in height). */
 const NATIVE_SCROLL_THRESHOLD = 220;

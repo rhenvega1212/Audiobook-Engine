@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GripVertical, Loader2, Play, Volume2 } from "lucide-react";
 import {
   getTextSelectionInElement,
@@ -15,6 +15,12 @@ import {
   type SpeakerCharacter,
 } from "@/components/books/speaker-select";
 import type { Character } from "@/lib/types/database";
+
+function resizeTextarea(el: HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = `${el.scrollHeight}px`;
+}
 
 export function ManuscriptLineRow({
   bookId,
@@ -35,6 +41,7 @@ export function ManuscriptLineRow({
   onClearFlag,
   onPlay,
   onCastVoice,
+  onLineTextSave,
   onTextSelected,
   selectionEnabled = false,
   reorderEnabled = false,
@@ -69,6 +76,7 @@ export function ManuscriptLineRow({
   onClearFlag: (line: ManuscriptLine) => void;
   onPlay: (line: ManuscriptLine) => void;
   onCastVoice: (line: ManuscriptLine) => void;
+  onLineTextSave?: (line: ManuscriptLine, lineText: string) => Promise<void>;
   onTextSelected?: (payload: TextSelectionPayload) => void;
   reorderEnabled?: boolean;
   isDragging?: boolean;
@@ -83,6 +91,10 @@ export function ManuscriptLineRow({
   speechTagAfter?: string | null;
 }) {
   const textRef = useRef<HTMLParagraphElement>(null);
+  const closingEditRef = useRef(false);
+  const [editingText, setEditingText] = useState(false);
+  const [draftText, setDraftText] = useState(line.line_text);
+  const [savingText, setSavingText] = useState(false);
   const speakerValue = resolveSpeakerIdFromLine(
     line.speaker_label,
     line.speaker_character_id,
@@ -90,17 +102,69 @@ export function ManuscriptLineRow({
   );
   const isFlagged = lineNeedsHumanReview(line);
   const excluded = line.excluded_from_export;
+  const canEditText = !!onLineTextSave;
+
+  useEffect(() => {
+    if (!editingText) {
+      setDraftText(line.line_text);
+    }
+  }, [line.line_text, editingText]);
+
+  function startTextEditing() {
+    if (!canEditText || isSaving || savingText) return;
+    closingEditRef.current = false;
+    setDraftText(line.line_text);
+    setEditingText(true);
+    onHighlight(line.id);
+  }
+
+  function cancelTextEditing() {
+    closingEditRef.current = true;
+    setEditingText(false);
+    setDraftText(line.line_text);
+  }
+
+  async function commitTextEditing() {
+    if (!onLineTextSave || savingText) return;
+    const trimmed = draftText.trim();
+    if (trimmed === line.line_text.trim()) {
+      cancelTextEditing();
+      return;
+    }
+    if (!trimmed) {
+      cancelTextEditing();
+      return;
+    }
+    setSavingText(true);
+    try {
+      await onLineTextSave(line, trimmed);
+      closingEditRef.current = true;
+      setEditingText(false);
+    } finally {
+      setSavingText(false);
+    }
+  }
+
+  function handleEditorBlur() {
+    if (closingEditRef.current) {
+      closingEditRef.current = false;
+      return;
+    }
+    void commitTextEditing();
+  }
 
   return (
     <div
-      className={`relative rounded-md px-3 py-2 transition-colors border-l-4 ${
+      className={`relative rounded-md px-3 py-2.5 transition-colors border-l-4 ${
         isDragOver
           ? "ring-2 ring-burgundy/50 ring-inset"
           : ""
       } ${
         isDragging
           ? "opacity-40"
-          : isHighlighted
+          : editingText
+            ? "bg-white border-l-burgundy ring-1 ring-burgundy/25"
+            : isHighlighted
           ? "bg-teal/15 border-l-teal ring-1 ring-teal/30"
           : isSelected
             ? "bg-burgundy/10 border-l-burgundy"
@@ -173,7 +237,7 @@ export function ManuscriptLineRow({
           bookId={bookId}
           size="compact"
           includeUnknown
-          disabled={isSaving}
+          disabled={isSaving || savingText}
           value={speakerValue}
           characters={characters as SpeakerCharacter[]}
           onCharacterCreated={onCharacterCreated}
@@ -230,7 +294,7 @@ export function ManuscriptLineRow({
           <input
             type="checkbox"
             checked={excluded}
-            disabled={isSaving}
+            disabled={isSaving || savingText}
             onChange={() => onToggleExclude(line)}
             className="h-3.5 w-3.5 rounded border-slate/40"
           />
@@ -243,7 +307,7 @@ export function ManuscriptLineRow({
             size="sm"
             variant="secondary"
             className="h-7 text-[10px] px-2"
-            disabled={isSaving}
+            disabled={isSaving || savingText}
             onClick={(e) => {
               e.stopPropagation();
               onClearFlag(line);
@@ -252,54 +316,106 @@ export function ManuscriptLineRow({
             Clear flag
           </Button>
         )}
-        {isSaving && (
+        {(isSaving || savingText) && (
           <Loader2 className="h-3.5 w-3.5 animate-spin text-slate shrink-0" />
         )}
       </div>
 
-      <p
-        ref={textRef}
-        role="button"
-        tabIndex={0}
-        onClick={() => onHighlight(line.id)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onHighlight(line.id);
-          }
-        }}
-        className={`font-serif text-sm break-words whitespace-pre-wrap pl-6 select-text cursor-pointer ${
-          excluded ? "line-through text-slate" : "text-ink"
-        } ${selectionEnabled ? "cursor-text" : ""}`}
-        onMouseUp={(e) => {
-          e.stopPropagation();
-          if (!selectionEnabled || !onTextSelected || !textRef.current) return;
-          const offsets = getTextSelectionInElement(
-            textRef.current,
-            line.line_text
-          );
-          if (!offsets) return;
-          const sel = window.getSelection();
-          if (!sel?.rangeCount) return;
-          const rect = sel.getRangeAt(0).getBoundingClientRect();
-          onTextSelected({
-            lineId: line.id,
-            start: offsets.start,
-            end: offsets.end,
-            selectedText: offsets.selectedText,
-            rect,
-          });
-        }}
-      >
-        {line.line_text}
-      </p>
-      {speechTagAfter && (
-        <p className="font-serif text-sm text-slate italic pl-6 -mt-0.5 mb-0.5">
+      <div className="pl-6">
+        {editingText ? (
+          <div>
+            <textarea
+              autoFocus
+              value={draftText}
+              disabled={savingText}
+              onChange={(e) => setDraftText(e.target.value)}
+              ref={(el) => resizeTextarea(el)}
+              onInput={(e) => resizeTextarea(e.currentTarget)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancelTextEditing();
+                } else if (
+                  e.key === "Enter" &&
+                  (e.metaKey || e.ctrlKey)
+                ) {
+                  e.preventDefault();
+                  void commitTextEditing();
+                }
+              }}
+              onBlur={handleEditorBlur}
+              className={`w-full resize-none overflow-hidden rounded-md border border-burgundy/40 bg-white px-3 py-2 font-serif text-base leading-relaxed shadow-sm focus:outline-none focus:ring-2 focus:ring-burgundy/30 ${
+                excluded ? "line-through text-slate" : "text-ink"
+              }`}
+            />
+            <p className="mt-1 text-[10px] text-slate">
+              {savingText ? (
+                <span className="inline-flex items-center gap-1">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Saving…
+                </span>
+              ) : (
+                "⌘/Ctrl+Enter to save · Esc to cancel"
+              )}
+            </p>
+          </div>
+        ) : (
+          <p
+            ref={textRef}
+            role="button"
+            tabIndex={0}
+            title={canEditText ? "Click to edit text" : undefined}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (canEditText) {
+                startTextEditing();
+              } else {
+                onHighlight(line.id);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                if (canEditText) startTextEditing();
+                else onHighlight(line.id);
+              }
+            }}
+            className={`font-serif text-base leading-relaxed break-words whitespace-pre-wrap select-text ${
+              canEditText ? "cursor-text" : "cursor-pointer"
+            } ${
+              excluded ? "line-through text-slate" : "text-ink"
+            }`}
+            onMouseUp={(e) => {
+              e.stopPropagation();
+              if (!selectionEnabled || !onTextSelected || !textRef.current) return;
+              const offsets = getTextSelectionInElement(
+                textRef.current,
+                line.line_text
+              );
+              if (!offsets) return;
+              const sel = window.getSelection();
+              if (!sel?.rangeCount) return;
+              const rect = sel.getRangeAt(0).getBoundingClientRect();
+              onTextSelected({
+                lineId: line.id,
+                start: offsets.start,
+                end: offsets.end,
+                selectedText: offsets.selectedText,
+                rect,
+              });
+            }}
+          >
+            {line.line_text}
+          </p>
+        )}
+      </div>
+      {speechTagAfter && !editingText && (
+        <p className="font-serif text-base leading-relaxed text-slate italic pl-6 -mt-0.5 mb-0.5">
           {speechTagAfter}
         </p>
       )}
 
-      {isFlagged && line.flag_reason && (
+      {isFlagged && line.flag_reason && !editingText && (
         <p className="mt-1 pl-6 text-[10px] text-slate italic">{line.flag_reason}</p>
       )}
     </div>
