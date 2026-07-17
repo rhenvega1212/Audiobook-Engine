@@ -10,9 +10,9 @@ export function speakerValueForLine(
   },
   characters: Pick<Character, "id" | "canonical_name" | "aliases">[]
 ): string {
-  if (line.speaker_character_id) return line.speaker_character_id;
   if (line.speaker_label === "Narrator") return NARRATOR_VALUE;
   if (line.speaker_label === "UNKNOWN") return UNKNOWN_VALUE;
+  if (line.speaker_character_id) return line.speaker_character_id;
   const match = characters.find(
     (c) =>
       c.canonical_name === line.speaker_label ||
