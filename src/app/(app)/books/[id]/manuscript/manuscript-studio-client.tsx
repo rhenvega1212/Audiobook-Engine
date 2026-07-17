@@ -482,27 +482,42 @@ export function ManuscriptStudioClient({
     [speakerRoster]
   );
 
+  // Deep-link (?line=) should jump to that line's chapter/position once on
+  // load — not on every edit. `lines`/`filtered`/`blocks` get new array
+  // references on every save (see applyLinePatch), so without this guard
+  // these effects re-fire on every edit and yank the user back to the
+  // originally-linked line's chapter mid-review.
+  const appliedInitialChapterRef = useRef<string | null>(null);
+  const appliedInitialScrollRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!initialLineId || chapters.length === 0) return;
+    if (appliedInitialChapterRef.current === initialLineId) return;
     const line = lines.find((l) => l.id === initialLineId);
     if (!line) return;
     const ch = findChapterForLine(chapters, line.line_order);
-    if (ch) setChapterFilter(ch.id);
+    if (ch) {
+      setChapterFilter(ch.id);
+      appliedInitialChapterRef.current = initialLineId;
+    }
   }, [initialLineId, lines, chapters]);
 
   useEffect(() => {
     if (!initialLineId) return;
+    if (appliedInitialScrollRef.current === initialLineId) return;
     if (compactView) {
       const idx = blocks.findIndex((b) => b.line_ids.includes(initialLineId));
       if (idx >= 0) {
         setScrollToIndex(idx);
         setHighlightLineId(initialLineId);
+        appliedInitialScrollRef.current = initialLineId;
       }
     } else {
       const idx = filtered.findIndex((l) => l.id === initialLineId);
       if (idx >= 0) {
         setScrollToIndex(idx);
         setHighlightLineId(initialLineId);
+        appliedInitialScrollRef.current = initialLineId;
       }
     }
   }, [initialLineId, filtered, blocks, compactView]);
