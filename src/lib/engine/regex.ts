@@ -3,8 +3,16 @@ import { DIALOGUE_VERBS_PATTERN } from "./vocabulary";
 export const DIALOGUE_RE = /["“]([^"”]+?)["”]/g;
 export const NAME_RE = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/g;
 
+// Covers both tag orders: "Nikki said." and the inverted "asked a man's
+// voice from behind her." — English speech tags use either freely, and
+// missing the inverted form left such narration undetected as a tag,
+// so it never attached to the dialogue it belongs to.
 export const DIALOGUE_TAG_START_RE = new RegExp(
-  `^\\s*(?:[A-Z][a-z]+(?:\\s+[A-Z][a-z]+)?|he|she|they|him|her|them)\\s+(?:${DIALOGUE_VERBS_PATTERN})\\b[^.!?,]*[.,]?`,
+  `^\\s*(?:` +
+    `(?:[A-Z][a-z]+(?:\\s+[A-Z][a-z]+)?|he|she|they|him|her|them)\\s+(?:${DIALOGUE_VERBS_PATTERN})\\b[^.!?,]*[.,]?` +
+    `|` +
+    `(?:${DIALOGUE_VERBS_PATTERN})\\b\\s+[^.!?,]*[.,]?` +
+    `)`,
   "i"
 );
 
