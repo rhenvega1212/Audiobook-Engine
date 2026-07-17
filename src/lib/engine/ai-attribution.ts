@@ -161,6 +161,7 @@ Important rules:
 - Continuation lines (same utterance split across rows) keep the same speaker as the previous dialogue line
 - When a new character enters and speaks, assign them — do not keep the previous scene's speaker
 - Quoted speech must be assigned to a character, not Narrator
+- Exception: a quoted phrase following a perception verb (sang, was singing, read, watched, played, etc.) that names a song, TV show, movie, or book title is not dialogue — attribute it to Narrator, not the nearby character
 - Use exact canonical names from the roster (e.g. "Nikki Sands" not "Nikki")
 - If you cannot determine the speaker with confidence, return "UNKNOWN"
 - Prefer "low" confidence over guessing when attribution is ambiguous
