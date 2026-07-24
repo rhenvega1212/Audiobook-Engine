@@ -82,6 +82,12 @@ export const ATTRIBUTION_CORRECTION_EXAMPLES: AttributionCorrectionExample[] = [
     correct: "Nikki",
     why: "Continuation of Nikki's reply to Isabel (same speech as line 223).",
   },
+  {
+    line_order: 396,
+    wrong: "UNKNOWN",
+    correct: "McCall",
+    why: "Line was spoken by an unidentified \"man's voice\" — he isn't named until four lines later, when he introduces himself: \"I'm Detective McCall.\" Once an anonymous speaker is named later in the same unbroken scene, backfill their earlier unnamed line(s) to that name.",
+  },
 ];
 
 export function formatAttributionExamplesForPrompt(

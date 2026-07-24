@@ -157,6 +157,7 @@ Important rules:
 - "Narrator" is only for non-dialogue (description, action). Any line that is clearly quoted speech belongs to a character, even if it lacks quote marks in storage
 - A character NAME inside dialogue does NOT mean that character is speaking (e.g. Nikki saying "about Isabel" → speaker is Nikki, not Isabel)
 - A character mentioned in the NEXT line or nearby narration is NOT automatically the speaker of this line
+- Exception: if this line's speaker is UNKNOWN or only described generically (e.g. "a man's voice," "someone," "a stranger") and that same unidentified person is explicitly named a few lines later in the same unbroken scene — through self-introduction ("I'm Detective McCall") or narration continuing to describe their actions by name — assign this line to that revealed name instead of UNKNOWN
 - In two-person dialogue, speakers usually alternate — a line is often a direct response to the previous speaker
 - Continuation lines (same utterance split across rows) keep the same speaker as the previous dialogue line
 - When a new character enters and speaks, assign them — do not keep the previous scene's speaker
