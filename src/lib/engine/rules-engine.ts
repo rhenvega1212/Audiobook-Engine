@@ -200,13 +200,27 @@ function attributionForDialogue(
   const after = paragraph.slice(seg.end).trim();
   const before = paragraph.slice(0, seg.start).trim();
 
+  // Matches both tag orders: "Nikki said" / "she asked" (subject-first) and
+  // the inverted "asked a man's voice from behind her" (verb-first). Missing
+  // the inverted form meant trailing tags like that fell through to context
+  // guessing instead of being read as the actual attribution.
   const afterTag = after.match(
-    /^[,.\s]*(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?|he|she|they|him|her|them)\s+(?:\w+\s+){0,3}(?:said|asked|replied|whispered|shouted|murmured|added|continued|exclaimed)/i
+    new RegExp(
+      `^[,.\\s]*(?:` +
+        `(?:[A-Z][a-z]+(?:\\s+[A-Z][a-z]+)?|he|she|they|him|her|them)\\s+(?:\\w+\\s+){0,3}(?:${DIALOGUE_VERBS_PATTERN})` +
+        `|` +
+        `(?:${DIALOGUE_VERBS_PATTERN})\\s+[^.!?,]*` +
+        `)`,
+      "i"
+    )
   );
   if (afterTag) return afterTag[0].trim();
 
   const beforeTag = before.match(
-    /(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?|he|she|they)\s+(?:\w+\s+){0,3}(?:said|asked|replied|whispered|shouted|murmured|added|continued|exclaimed)[,.\s]*$/i
+    new RegExp(
+      `(?:[A-Z][a-z]+(?:\\s+[A-Z][a-z]+)?|he|she|they)\\s+(?:\\w+\\s+){0,3}(?:${DIALOGUE_VERBS_PATTERN})[,.\\s]*$`,
+      "i"
+    )
   );
   if (beforeTag) return beforeTag[0].trim();
 
