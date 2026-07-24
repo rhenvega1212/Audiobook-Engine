@@ -551,9 +551,9 @@ export function resolveSpeakerIdFromLine(
   speakerCharacterId: string | null | undefined,
   characters: SpeakerCharacter[]
 ): string {
-  if (speakerCharacterId) return speakerCharacterId;
   if (speakerLabel === "Narrator") return NARRATOR_VALUE;
   if (speakerLabel === "UNKNOWN") return UNKNOWN_VALUE;
+  if (speakerCharacterId) return speakerCharacterId;
   const match = characters.find(
     (c) =>
       c.canonical_name === speakerLabel ||
